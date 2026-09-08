@@ -11,16 +11,18 @@
       {::wb/handler {:routes #ig/ref :my/routes :session {...} ...}
        ::wb/server  {:handler #ig/ref ::wb/handler :port 3000}}
 
-  `config/readers` is merged in so `#wb/env` works in the same EDN."
+  `config/readers` is merged in so `#wb/env` works in the same EDN, and the
+  two-argument form takes readers of the host's own."
   (:refer-clojure :exclude [read-string])
   (:require [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.config :as config]
             [integrant.core :as ig]))
 
 (defn read-string
-  "Integrant's reader with the base's tags added."
-  [s]
-  (ig/read-string {:readers config/readers} s))
+  "Integrant's reader with the base's tags added, or with the readers given —
+  `config/env-file-readers` for a development machine, say."
+  ([s] (read-string config/readers s))
+  ([readers s] (ig/read-string {:readers readers} s)))
 
 (defmethod ig/init-key ::wb/handler [_ config]
   (wb/handler config))

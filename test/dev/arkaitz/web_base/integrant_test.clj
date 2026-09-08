@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [dev.arkaitz.web-base :as wb]
+            [dev.arkaitz.web-base.config :as config]
             [dev.arkaitz.web-base.integrant :as wbi]
             [integrant.core :as ig])
   (:import [clojure.lang ExceptionInfo]
@@ -76,3 +77,13 @@
            (try (wbi/read-string "#wb/env \"WB_SURELY_UNSET_123\"") (catch ExceptionInfo e [(ex-message e) (ex-data e)]))))
     (is (thrown-with-msg? RuntimeException #"No reader function for tag wb/env" (ig/read-string "#wb/env \"PATH\""))
         "control: integrant alone does not know the tag — the merge is what adds it")))
+
+(deftest read-string-with-readers-given-uses-them-and-keeps-integrant-s-own-tags
+  (is (nil? (System/getenv "WB_TEST_FALLBACK"))
+      "precondition: WB_TEST_FALLBACK is not exported — unset it in this shell and run again")
+  (let [read (wbi/read-string (config/env-readers {"WB_TEST_FALLBACK" "from-the-map"} "probe")
+                              "{:a #ig/ref :x/b :v #wb/env \"WB_TEST_FALLBACK\"}")]
+    (is (= {:a (ig/ref :x/b) :v "from-the-map"} read)
+        "the readers given resolve #wb/env, and #ig/ref is still integrant's")
+    (is (ig/ref? (:a read))
+        "as a Ref: the readers given are merged with integrant's, not put in their place")))

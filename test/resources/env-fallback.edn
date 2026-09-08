@@ -1,0 +1,6 @@
+;; Fixture for the env-file fallback tests. "HOME" is load-bearing: it is set
+;; in every JVM, so it proves the environment wins over this file. Never add
+;; WB_SURELY_UNSET_XYZ here — a test names it precisely because nothing has it.
+{"HOME"            "not-this-one"
+ "WB_TEST_FALLBACK" "from-the-file"
+ "WB_SESSION_KEY"   "AAECAwQFBgcICQoLDA0ODw=="}

@@ -97,6 +97,30 @@
           {:read-errors [] :violations []}
           files))
 
+(defn- edn-file-literals
+  "Every string literal under `root` that names an EDN file."
+  [files]
+  (vec (sort (for [[path file] files
+                   {:keys [form]} (read-all-forms file)
+                   s (filter string? (tree-seq coll? seq form))
+                   :when (str/ends-with? s ".edn")]
+               [path s]))))
+
+(deftest the-base-names-no-edn-file-of-its-own
+  ;; SPEC §3 and §11's second trap: config is passed in, and a base that knew
+  ;; a file name could look for it, letting the working directory decide the
+  ;; session signing key. This scan is narrower than that condition — it
+  ;; catches the shape the demo uses, `(def env-file "env.local.edn")`, not
+  ;; every way a path could be built. The condition itself rests on rule 1
+  ;; and on review.
+  (let [root (src-root)]
+    (is (some? root) "precondition: the sources were located through the classpath")
+    (when root
+      (let [files (source-files root)]
+        (is (contains? files anchor-path) "precondition: the scan reached the real sources")
+        (is (= [] (edn-file-literals files))
+            "an EDN file name in the base is how auto-detection starts: pass the path in instead")))))
+
 (deftest only-the-integrant-namespace-references-integrant
   (let [root (src-root)]
     (is (some? root)

@@ -43,5 +43,6 @@
                       ch.qos.logback/logback-classic {:mvn/version "1.6.3"}
                       integrant/repl                 {:mvn/version "0.5.1"}}}
 
-  :build {:deps       {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+  :build {:deps       {io.github.clojure/tools.build {:mvn/version "0.10.14"}
+                       slipset/deps-deploy            {:mvn/version "0.2.5"}}
           :ns-default build}}}

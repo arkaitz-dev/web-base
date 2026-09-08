@@ -1,0 +1,15 @@
+{:demo/store {:todos [{:id 1 :title "Try htmx 4 with Hiccup" :done? false}
+                      {:id 2 :title "Route with reitit" :done? true}]}
+
+ ;; The signing key comes from the environment and is never committed;
+ ;; generate one once with (dev.arkaitz.web-base.session/generate-key).
+ ;; :secure? false is the named opt-out for http://localhost — Safari does not
+ ;; send a Secure cookie there.
+ :demo/web-config {:store       #ig/ref :demo/store
+                   :session-key #wb/env "WB_SESSION_KEY"
+                   :secure?     false}
+
+ :dev.arkaitz.web-base/handler #ig/ref :demo/web-config
+
+ :dev.arkaitz.web-base/server {:handler #ig/ref :dev.arkaitz.web-base/handler
+                               :port    3000}}

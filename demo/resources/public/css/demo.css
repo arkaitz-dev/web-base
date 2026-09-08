@@ -1,0 +1,96 @@
+/* The demo's own look: brand colours through web-base's custom properties,
+ * then the components the demo itself emits. Nothing here is web-base's. */
+
+:root {
+  --wb-bg: #f6f5f2;
+  --wb-text: #23211d;
+  --wb-muted: #6f6a60;
+  --wb-border: #dedbd2;
+  --wb-accent: #2f6f4e;
+  --wb-danger: #a33a2c;
+  --surface: #ffffff;
+  --accent-soft: #e6f0ea;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wb-bg: #16181a;
+    --wb-text: #e8e6e1;
+    --wb-muted: #9aa0a6;
+    --wb-border: #32373b;
+    --wb-accent: #6ec49a;
+    --wb-danger: #e08074;
+    --surface: #1e2124;
+    --accent-soft: #23342c;
+  }
+}
+
+.wb-header h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
+.tagline { margin: 0.25rem 0 0; color: var(--wb-muted); font-size: 0.9rem; }
+.wb-nav form.inline { display: inline; }
+.wb-nav form.inline button, .lang button {
+  background: none; border: none; color: var(--wb-accent); font: inherit; cursor: pointer; padding: 0;
+}
+.lang { display: inline-flex; gap: 0.3rem; margin-inline-start: 1rem; font-size: 0.85rem; }
+.lang select { font: inherit; font-size: 0.85rem; }
+
+.tabs { display: flex; gap: 0.4rem; margin-bottom: -1px; }
+.tab {
+  border: 1px solid var(--wb-border);
+  border-bottom-color: transparent;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--wb-muted);
+  padding: 0.55rem 1.1rem;
+  font: inherit; font-size: 0.92rem; cursor: pointer;
+}
+.tab:hover { color: var(--wb-text); }
+.tab.is-active { background: var(--surface); color: var(--wb-text); font-weight: 600; box-shadow: inset 0 2px 0 var(--wb-accent); }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 0 var(--radius) var(--radius) var(--radius);
+  padding: 1.5rem;
+}
+.panel h2 { margin-top: 0; }
+.hint { margin: 0 0 1.25rem; color: var(--wb-muted); font-size: 0.88rem; }
+
+.row { display: flex; gap: 0.5rem; }
+input[type="text"], input[type="email"], input[type="search"] {
+  flex: 1; min-width: 0; padding: 0.55rem 0.7rem;
+  border: 1px solid var(--wb-border); border-radius: var(--radius);
+  background: var(--wb-bg); color: var(--wb-text); font: inherit;
+}
+input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 1px; }
+button { cursor: pointer; }
+.primary {
+  border: 1px solid transparent; border-radius: var(--radius);
+  background: var(--wb-accent); color: var(--surface);
+  padding: 0.55rem 1.1rem; font: inherit; font-weight: 600;
+}
+.icon { border: none; background: none; color: var(--wb-muted); font-size: 1rem; line-height: 1; padding: 0.25rem; }
+.icon:hover { color: var(--wb-text); }
+.icon.danger:hover { color: var(--wb-danger); }
+
+.todos { list-style: none; margin: 1.25rem 0 0; padding: 0; }
+.todo { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0; border-top: 1px solid var(--wb-border); }
+.todo-title { flex: 1; }
+.todo.is-done .todo-title { color: var(--wb-muted); text-decoration: line-through; }
+.empty { padding: 1.25rem 0; color: var(--wb-muted); border-top: 1px solid var(--wb-border); text-align: center; font-size: 0.9rem; }
+
+.cards { list-style: none; margin: 1.25rem 0 0; padding: 0; }
+.card { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.6rem 0; border-top: 1px solid var(--wb-border); }
+.card-title { font-weight: 600; }
+.card-year { color: var(--wb-muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.tags { display: flex; flex-wrap: wrap; gap: 0.3rem; list-style: none; margin: 0 0 0 auto; padding: 0; }
+.tag { background: var(--accent-soft); color: var(--wb-accent); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.75rem; }
+
+.field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 1rem; }
+.field label { font-size: 0.85rem; color: var(--wb-muted); }
+.field input { flex: none; width: 100%; }
+.field.has-error input { border-color: var(--wb-danger); }
+.error { margin: 0; color: var(--wb-danger); font-size: 0.82rem; }
+.form-actions { display: flex; align-items: center; gap: 0.75rem; }
+.saved { color: var(--wb-accent); font-size: 0.9rem; }

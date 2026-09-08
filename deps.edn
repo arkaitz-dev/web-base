@@ -21,14 +21,14 @@
  {;; A real SLF4J backend is part of the test classpath on purpose: with no
   ;; backend the MDC adapter is a no-op and every request-id assertion would
   ;; pass against a broken implementation.
-  :test {:extra-paths ["test" "test/resources"]
+  :test {:extra-paths ["test" "test/resources" "demo/src" "demo/resources" "demo/test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                        ring/ring-mock                 {:mvn/version "0.6.2"}
                        ch.qos.logback/logback-classic {:mvn/version "1.6.3"}
                        metosin/reitit-malli           {:mvn/version "0.10.1"}
                        metosin/malli                  {:mvn/version "0.20.1"}}
-         :main-opts   ["-m" "cognitect.test-runner"]
+         :main-opts   ["-m" "cognitect.test-runner" "-d" "test" "-d" "demo/test"]
          :exec-fn     cognitect.test-runner.api/test}
 
   :demo {:extra-paths ["demo/src" "demo/resources"]

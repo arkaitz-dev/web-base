@@ -19,14 +19,24 @@ them.
 
 ## Project state
 
-Specification settled; **no code yet**. The next step is implementation, and it is an
-**extraction from `../prueba`** — a working prototype that already covers most of the
-scope — not a fresh start. See `SPEC.md` §9.
+**Implementation in progress**, as an **extraction from `../prueba`** — a working
+prototype that already covers most of the scope — not a fresh start. See `SPEC.md` §9.
+The implementation plan lives outside the repository (Claude plan file
+`joyful-tinkering-gadget.md`); the commit history is the record of completed steps.
 
 Build, test and REPL commands are recorded here **only once they have actually been run
-and observed to work**, never from convention. Nothing has been run yet. The reference
-for the likely shape is `../prueba/deps.edn`, whose aliases are `:run`, `:dev` and
-`:build`.
+and observed to work**, never from convention. Observed so far:
+
+```
+clojure -M:test                       # whole suite, cognitect test-runner, exit ≠ 0 on failure
+clojure -M:test -n <namespace>        # one test namespace
+clojure -T:build jar                  # library jar → target/web-base-0.1.0.jar (no demo inside)
+```
+
+`test/dev/arkaitz/web_base/dependencies_test.clj` scans `src/` with the Clojure reader
+and fails if any namespace other than `dev.arkaitz.web-base.integrant` references
+integrant (SPEC §10). Because integrant is on the base classpath, that scan is the only
+signal such a require would ever produce.
 
 ## The two rules that must survive contact with code
 

@@ -1,0 +1,42 @@
+{:paths ["src" "resources"]
+
+ ;; Only metosin/reitit-ring: the metosin/reitit umbrella drags malli, muuntaja,
+ ;; jackson, swagger-ui and pedestal onto every consumer's classpath, and
+ ;; reitit-middleware drags muuntaja, spec-tools and deep-diff for the twenty
+ ;; lines of exception dispatch the base writes itself.
+ :deps {org.clojure/clojure       {:mvn/version "1.12.5"}
+        metosin/reitit-ring       {:mvn/version "0.10.1"}
+        hiccup/hiccup             {:mvn/version "2.0.0"}
+        ring/ring-jetty-adapter   {:mvn/version "1.15.5"}
+        org.clojure/tools.logging {:mvn/version "1.3.1"}
+        ;; Required only by dev.arkaitz.web-base.integrant; nothing else may load it.
+        integrant/integrant       {:mvn/version "1.0.1"}}
+
+ :aliases
+ {;; A real SLF4J backend is part of the test classpath on purpose: with no
+  ;; backend the MDC adapter is a no-op and every request-id assertion would
+  ;; pass against a broken implementation.
+  :test {:extra-paths ["test" "test/resources"]
+         :extra-deps  {io.github.cognitect-labs/test-runner
+                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                       ring/ring-mock                 {:mvn/version "0.6.2"}
+                       ch.qos.logback/logback-classic {:mvn/version "1.6.3"}
+                       metosin/reitit-malli           {:mvn/version "0.10.1"}
+                       metosin/malli                  {:mvn/version "0.20.1"}}
+         :main-opts   ["-m" "cognitect.test-runner"]
+         :exec-fn     cognitect.test-runner.api/test}
+
+  :demo {:extra-paths ["demo/src" "demo/resources"]
+         :extra-deps  {metosin/reitit-malli           {:mvn/version "0.10.1"}
+                       metosin/malli                  {:mvn/version "0.20.1"}
+                       ch.qos.logback/logback-classic {:mvn/version "1.6.3"}}
+         :main-opts   ["-m" "demo.main"]}
+
+  :dev {:extra-paths ["dev" "demo/src" "demo/resources"]
+        :extra-deps  {metosin/reitit-malli           {:mvn/version "0.10.1"}
+                      metosin/malli                  {:mvn/version "0.20.1"}
+                      ch.qos.logback/logback-classic {:mvn/version "1.6.3"}
+                      integrant/repl                 {:mvn/version "0.5.1"}}}
+
+  :build {:deps       {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+          :ns-default build}}}

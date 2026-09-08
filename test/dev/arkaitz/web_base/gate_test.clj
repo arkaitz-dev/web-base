@@ -79,6 +79,11 @@
     (is (= "ana" (:wb/subject @by-pred)) "and the subject"))
   (is (= {:status 200 :body "hi nil"} (app (get* "/open")))
       "predicate true without a subject still runs the handler — the base does not second-guess the predicate")
+  ;; A refusal is what speaks htmx; a pass must not. Without this row a gate
+  ;; that refused every fragment would be green — and an htmx swap of a gated
+  ;; route is what the README teaches.
+  (is (= {:status 200 :body "hi \"ana\""} (app (get* "/priv" "X-Subject" "ana" "HX-Request" "true")))
+      "an htmx swap with the subject present passes untouched: no HX-Redirect, no fragment")
   (is (= 403 (:status (app (get* "/never" "X-Subject" "ana")))) "predicate false with a subject → 403"))
 
 (deftest refusal-without-a-subject--303-on-a-navigation--hx-redirect-and-never-location-on-a-partial

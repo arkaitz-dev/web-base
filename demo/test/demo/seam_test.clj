@@ -49,11 +49,12 @@
           token   (testing/csrf-token form)
           login   (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
                            (testing/with-cookies form)))
-          before  (testing/cookies form)
           rotated (testing/cookies login)]
       (is (some? token) "the login form carries the csrf field")
       (is (= [303 "/private"] [(:status login) (get-in login [:headers "Location"])]) "login redirects to the private page")
-      (is (and (seq rotated) (not= rotated before)) "the session id was rotated on login")
+      ;; That the id rotated is proved below over a store with ids: under the
+      ;; cookie store every write differs anyway (random IV).
+      (is (seq rotated) "login wrote the session cookie")
       (let [private (app (testing/with-cookies (mock/request :get "/private") login))]
         (is (= 200 (:status private)))
         (is (str/includes? (:body private) "Eres ada") "the private page names the subject")))
@@ -123,3 +124,23 @@
            [(:status swap) (:body swap)])
         "a swap of /boom: exactly the base's 500 fragment")))
 
+(deftest login-rotates-the-session-id--proved-over-a-store-with-ids
+  ;; The demo's cookie store cannot witness `session/rotate`: every write
+  ;; differs anyway, so "the cookie changed" would be green with the call
+  ;; gone. A memory store has ids, and only rotation changes them.
+  (let [sessions (atom {})
+        app      (wb/handler (assoc (ig/init-key :demo/web-config {:store       (ig/init-key :demo/store {:todos []})
+                                                                    :session-key KEY
+                                                                    :secure?     false})
+                                    :session {:store (memory/memory-store sessions)}))
+        form     (get* app "/login")
+        before   (get (testing/cookies form) "ring-session")
+        login    (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" (testing/csrf-token form)})
+                          (testing/with-cookies form)))
+        after    (get (testing/cookies login) "ring-session")]
+    (is (string? before) "the form minted a session: it holds the CSRF token")
+    (is (= 303 (:status login)) "login succeeded")
+    (is (string? after) "login wrote a session cookie")
+    (is (not= before after) "with a different id: the demo called session/rotate")
+    (is (= "ada" (get-in @sessions [after :subject])) "the new session holds the subject")
+    (is (nil? (get @sessions before)) "and the old id is gone from the store")))

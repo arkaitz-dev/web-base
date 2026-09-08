@@ -124,13 +124,76 @@ routes, one public page, one gated page, a deliberate error. It is not a showcas
 is the acceptance test. **If the demo needs anything that is not in web-base, the
 seam is in the wrong place.**
 
-## 9 · Open, to settle before or during implementation
+## 9 · Settled 2026-09-08 — HTMX and Hiccup, extracted from an existing prototype
 
-- **Server-rendered HTML, a JSON API with a separate frontend, or both?** This decides
-  what "page shell" even means, and it is the largest open question here.
-- **Which libraries** for routing, lifecycle and sessions. All of them exist; the
-  choice is about weight and about which of them try to invert control.
-- **Where sessions live** — in a signed cookie, or server-side with a store the host
+**The largest open question — server-rendered HTML, a JSON API, or both — is closed:
+server-rendered HTML with HTMX, and Hiccup for the markup.**
+
+This dissolves the fork rather than straddling it. There is one face, not two to keep
+in step, and with Hiccup the "one answer, two renderings" discipline is not a rule to
+impose but the natural shape: **the view returns data, and the handler decides how to
+emit it**. The cost, stated so it is not discovered later: **the day a real API is
+needed** — a native app, a third party integrating — **it still has to be built.** The
+approach solves the web and leaves that untouched.
+
+### The stack, taken from `../prueba`
+
+| | |
+|---|---|
+| lifecycle | **integrant** — `config.edn` with `#ig/ref`, `ig/init` / `ig/halt!` |
+| routing | **reitit** — with malli coercion and its exception middleware |
+| schemas | **malli** |
+| markup | **hiccup 2** |
+| server | **ring-jetty-adapter** |
+| build | **tools.build**, `integrant/repl` under a `:dev` alias |
+
+### Not a fresh start: an extraction
+
+`../prueba` is not a sketch. It is **a working prototype of most of §6**: lifecycle
+with its shutdown hook, EDN config with a CLI port override, routing with coercion, an
+exception middleware, static assets via `create-resource-handler`, and a page shell in
+`views/layout`. Handlers take their dependencies explicitly (`(partial handler store)`)
+— no ambient state, which is §3's corollary already honoured.
+
+It also already states the discipline, in a docstring: *"Every function returns plain
+Hiccup data; turning it into a string is the responsibility of the handlers."*
+
+**So the honest path is to extract and generalise `prueba`, not to start from zero.**
+And §8 comes free: strip the base out and what remains — store, todos, search, signup —
+**is** the demo application the spec asks for.
+
+### What web-base must own that the prototype does not yet
+
+1. **Fragment or full page, decided from the `HX-Request` header — not by the
+   handler.** Left to the handler it produces duplicate routes: one for direct
+   navigation, another for the htmx swap. Decided by the base, one handler serves both:
+   it returns Hiccup, and the base wraps it in the shell **only when the request did not
+   come from htmx**. That is what a page shell is for.
+
+2. **The gate must speak HTMX.** Answer an htmx request with a `302` and **htmx follows
+   the redirect**, planting the login page inside the target `div` — a form embedded in
+   half a screen. The fix is the **`HX-Redirect`** response header. Exactly the kind of
+   detail that belongs in the base rather than being rediscovered by every consumer.
+
+   This extends §5: the base receives a function saying whether there is a subject, and
+   **translates a refusal into the right outcome for the kind of request** — an ordinary
+   redirect, an `HX-Redirect`, or a `401` if an API ever exists.
+
+3. **The uniform error shape, as data with renderers.** The prototype's exception
+   middleware answers `text/plain`, with a comment explaining that the app speaks only
+   HTML. In the base this becomes **an error datum with several renderings**: a full
+   page, a fragment to swap into its target, or plain text. **An error inside an htmx
+   swap must not return a whole page.**
+
+4. **Sessions**, which the prototype has none of.
+
+5. **Logging with a request id.** The prototype depends on `slf4j-nop`, which silences
+   logging altogether — convenient in a toy, incompatible with §6. That dependency has
+   to become a real backend.
+
+## 10 · Still open
+
+- **Where sessions live** — a signed cookie, or server-side with a store the host
   supplies as a port.
 - **What a "subject" is** to the base. Probably an opaque value it never inspects.
 - **How the shell is themed** without web-base learning anything about the consumer's

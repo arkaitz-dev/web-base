@@ -1,0 +1,6 @@
+<configuration>
+  <!-- INFO enabled and no appender on root: the tests attach their own
+       ListAppender where they need to observe the backend, and the default
+       BasicConfigurator would otherwise print every access line to stdout. -->
+  <root level="INFO"/>
+</configuration>

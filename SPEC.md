@@ -136,6 +136,43 @@ emit it**. The cost, stated so it is not discovered later: **the day a real API 
 needed** — a native app, a third party integrating — **it still has to be built.** The
 approach solves the web and leaves that untouched.
 
+### Datastar was considered and set aside — deliberately
+
+**[Datastar](https://github.com/starfederation/datastar)** (starfederation) unifies in
+~14 KiB what htmx ends up needing htmx **plus** Alpine for: server interaction and
+client-side reactivity in one piece. The deeper difference is that it uses **SSE**
+rather than AJAX, so real-time push comes free. It remains **pre-release** (v1.0.0-RC.8
+when checked, 2026-09-08). In Clojure there is an official SDK and, more interestingly,
+**[Hyperlith](https://github.com/andersmurphy/hyperlith)** (Anders Murphy) — a
+hypermedia monolith built on Datastar with Hiccup and server-held state, which is very
+nearly our own problem solved by someone else.
+
+**Why htmx nonetheless:**
+
+- **Our need for real-time is close to nil.** The only candidate is a meeting in progress
+  with attendance and votes updating live — and it is already established that the
+  ordinary case is a show of hands with the result assigned directly, not a live count.
+  Billing, contabilidad, archivos and notifications need no push at all. SSE would be
+  paid for in long-lived connections, threads, proxies, timeouts and horizontal scaling,
+  against almost no benefit here.
+- **The plan is an extraction, not a rewrite.** `../prueba` works, with htmx. Datastar
+  would turn the extraction into a rewrite of the whole view layer, and **all three of
+  the base's htmx-specific behaviours would change** — `HX-Request` for fragment vs
+  page, `HX-Redirect` on the gate, and error rendering — since Datastar answers with SSE
+  events rather than HTML fragments.
+
+**And what makes the choice reversible:** that coupling is **small and localised** —
+one header check, one redirect header, one error renderer. **Three places.** So this is
+not a one-way door, provided `HX-` strings are not scattered through the codebase.
+
+**Recorded as an instruction, not as speculative abstraction:** keep those three points
+**named and isolated**. We are not building a layer to support both; we are simply not
+spreading the dependency around.
+
+**A note on method:** Hyperlith deserves reading, but **afterwards** — as with
+an earlier project. Our own implementation first, then it as a second opinion. Read before, we
+would adopt its decisions without having understood our own.
+
 ### The stack, taken from `../prueba`
 
 | | |

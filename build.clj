@@ -52,6 +52,29 @@
               :class-dir class-dir})
   (println "Installed" lib version))
 
+(def ^:private demo-class-dir "target/demo-classes")
+(def ^:private demo-jar-file (format "target/%s-demo-%s.jar" (name lib) version))
+
+(defn demo-uber
+  "A runnable jar of the demo application, for trying it without a Clojure
+  toolchain: `WB_SESSION_KEY=… java -jar <jar> [port]`. It is never published
+  — the demo is the acceptance test (SPEC §8), and the library jar built by
+  `jar` still contains none of it."
+  [_]
+  (b/delete {:path demo-class-dir})
+  (b/delete {:path demo-jar-file})
+  (let [basis (b/create-basis {:project "deps.edn" :aliases [:demo]})]
+    (b/copy-dir {:src-dirs   ["src" "resources" "demo/src" "demo/resources"]
+                 :target-dir demo-class-dir})
+    (b/compile-clj {:basis      basis
+                    :ns-compile '[demo.main]
+                    :class-dir  demo-class-dir})
+    (b/uber {:class-dir demo-class-dir
+             :uber-file demo-jar-file
+             :basis     basis
+             :main      'demo.main}))
+  (println "Built" demo-jar-file))
+
 (defn deploy
   "The jar and its pom to Clojars. Credentials come from CLOJARS_USERNAME and
   CLOJARS_PASSWORD (a deploy token) in the environment; the group must be

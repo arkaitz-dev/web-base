@@ -1,6 +1,7 @@
 (ns demo.main
-  "Entry point: `clojure -M:demo [port]`. Needs WB_SESSION_KEY in the
-  environment — the base refuses to invent one."
+  "Entry point: `clojure -M:demo [port]`, or `java -jar` on the uberjar built
+  by `clojure -T:build demo-uber`. Needs WB_SESSION_KEY in the environment —
+  the base refuses to invent one."
   (:gen-class)
   (:require [clojure.java.io :as io]
             [demo.system]
@@ -22,7 +23,7 @@
   (let [config (if port (with-port (read-config) port) (read-config))]
     (if-not config
       (binding [*out* *err*]
-        (println (str "Invalid port: " port " (usage: clojure -M:demo [port])"))
+        (println (str "Invalid port: " port " (expected 1-65535)"))
         (System/exit 1))
       (let [system (ig/init config)]
         (println (str "Demo listening on http://localhost:" (get-in system [:dev.arkaitz.web-base/server :port])))

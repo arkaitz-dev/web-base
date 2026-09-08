@@ -33,8 +33,13 @@ clojure -T:build jar                  # library jar → target/web-base-0.1.0.ja
 clojure -T:build install              # jar + pom into ~/.m2; consumed by :mvn/version (verified from another project)
 clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD (not run yet: needs credentials)
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
+clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.1.0.jar (18 MB, never published)
+WB_SESSION_KEY=<base64 of 16 bytes> java -jar target/web-base-demo-0.1.0.jar [port]
 clojure -M:dev                        # REPL with dev/user.clj: (go) (reset) (halt) (store)
 ```
+
+⚠ `jar`, `install` and `deploy` delete `target/` before building, so they also
+delete the demo uberjar. Build `demo-uber` last, or rebuild it afterwards.
 
 A key: `(dev.arkaitz.web-base.session/generate-key)` in any REPL, once, kept in the
 environment. The base refuses to invent one (SPEC §11).

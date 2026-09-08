@@ -303,8 +303,42 @@ when someone has just authenticated**. So the base must **expose "rotate this se
 in its API and document that the consumer is required to call it. Unsaid, it does not get
 done — and it produces no symptom at all.
 
-## 12 · Still open
+## 12 · The subject, and the shell as a set of slots
 
-- **What a "subject" is** to the base. Probably an opaque value it never inspects.
+**Settled: the subject belongs to the auth module, and the base needs to know nothing
+about it — not even as an opaque value it inspects.**
 
-*(Theming was settled in §10: structural CSS plus custom properties.)*
+The only thing that needs anything from the subject is the shell, to paint the
+"signed in as…" corner. That is not solved with a field but with a **slot**: the host
+hands the base **an already-rendered Hiccup fragment** for that area. The base never
+inspects the subject, never needs it to have a name, an id, or any shape at all. It
+carries it in the session and hands it back to whoever asked.
+
+**And that generalises into what is probably the shell's entire design.** Breadcrumbs,
+navigation, footer, the identity corner — all of them are **slots the host fills**. The
+page shell is therefore **not a layout with fields but a set of slots**, which should fit
+in very little code.
+
+### On "it is the base *we* will always use"
+
+Accepted as a criterion, and it is healthy not to design for imaginary third parties.
+But the trap deserves naming, because it is the author's own history: *"they always go
+together"* is exactly the reasoning that produced `contrib.auth`. Django ships auth
+always, and that is precisely why it cannot be taken out.
+
+**What settles it here without appealing to purity: decoupling is the cheaper
+implementation, not the more expensive one.** A base that does not understand the
+subject is *less* code than one that does; a slot to be filled is simpler than a user
+model. No price is being paid for independence — **independence *is* the simple
+version.** Where that holds, there is no dilemma to weigh.
+
+### Who §4 actually protects
+
+A restatement of the membership test that fits this project better: **it is not for
+strangers, it is for the author in two years.** §7 already says the second consumer is
+what should pull things inward — and the second consumer will almost certainly be his
+own next project. The base is not being protected from third parties: it is being
+protected from a future idea having to argue with assumptions the first consumer made.
+
+*(Theming was settled in §10: structural CSS plus custom properties. Nothing remains
+open in this document; what is left is implementation.)*

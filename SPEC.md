@@ -354,6 +354,20 @@ generate a random one and carry on. It works beautifully in development and **de
 every session on every deployment** in production, and worse, differs per instance when
 there is more than one. **The base must fail loudly when the key is missing**, not cope.
 
+**A file may supply the key; the base must never find it by itself** (settled
+2026-09-08, during the DX pass). Exporting the key on every start is friction, and
+friction is what makes people write the key into the repository. So the base lets a
+host hand in variables from a file it names — and only that. Four conditions, each
+one the reason the rest is safe: it is **explicit**, never auto-detected, or the
+working directory would decide the signing key and the base would be calling the
+host; the **environment always wins**, including a variable exported empty, since an
+operator who exported it named it and an empty key then fails loudly at construction;
+a value that does come from the file is **said out loud** at warn, naming the
+variable and the file, because a development convenience has to be visible anywhere
+else; and a variable in **neither** still fails while the config is read, exactly as
+before. The mechanical guard in the suite is narrow — no EDN file name appears in the
+base's own sources — and the condition itself rests on the first rule and on review.
+
 **Rotate the session id on login.** The defence against session fixation, and it has a
 division problem: the mechanism belongs to the base, but **only the auth module knows
 when someone has just authenticated**. So the base must **expose "rotate this session"**

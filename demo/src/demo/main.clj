@@ -1,7 +1,8 @@
 (ns demo.main
   "Entry point: `clojure -M:demo [port]`, or `java -jar` on the uberjar built
-  by `clojure -T:build demo-uber`. Needs WB_SESSION_KEY in the environment —
-  the base refuses to invent one."
+  by `clojure -T:build demo-uber`. The session key comes from WB_SESSION_KEY,
+  or from `env.local.edn` in the directory the process starts in when that
+  variable is unset — the base refuses to invent one either way."
   (:gen-class)
   (:require [clojure.java.io :as io]
             [demo.system]

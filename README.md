@@ -251,7 +251,42 @@ a swap lands inside its target. `hx-on`, `hx-vals js:` and trigger filters need
 ```
 
 `dev.arkaitz.web-base.integrant/read-string` reads `#ig/ref` and `#wb/env "VAR"`
-in the same EDN; requiring that namespace is what adds the methods.
+in the same EDN; requiring that namespace is what adds the methods. Its
+two-argument form takes readers of your own, which is what the next section
+uses.
+
+### Configuration, and not exporting secrets on every start
+
+`#wb/env "VAR"` resolves while the config is read, and has no default form:
+a default is how a development key reaches production. On a development
+machine, name the variables in an EDN file instead and hand the readers in:
+
+```clojure
+;; env.local.edn — never committed
+{"WB_SESSION_KEY" "…base64 of 16 bytes…"}
+
+(wbi/read-string (config/env-file-readers "env.local.edn")   ; or config/read-string, read-resource, read-file
+                 (slurp (io/resource "config.edn")))
+```
+
+Both sides of the map are strings, and anything else is refused when the
+readers are built, naming the file. Then:
+
+- **The base never looks for that file.** It reads the path you pass and
+  nothing else; an absent file is not an error, it is the production case, and
+  yields the plain `readers`.
+- **The environment always wins**, including a variable exported empty — an
+  operator who exported it named it. An empty session key then fails at
+  startup asking for sixteen bytes, which names the key but not the variable.
+- **A value that comes from the file is logged at warn** by
+  `dev.arkaitz.web-base.config`, naming the variable and the file's absolute
+  path, so a file left next to a deployment is visible and findable. Silencing
+  that logger removes the only signal there is.
+- A `#wb/env` inside the file still means the environment.
+
+Keep the file out of the repository. `*.local.edn` in `.gitignore` is the
+pattern this project uses, and the demo's test asks git itself rather than
+trusting the pattern.
 
 ## The demo
 
@@ -262,6 +297,15 @@ deliberate error, two languages, a strict CSP.
 ```
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]
 clojure -M:dev     # REPL: (go) (reset) (halt)
+```
+
+Or write the key once into `env.local.edn` in the directory you start from,
+and drop the variable:
+
+```
+echo '{"WB_SESSION_KEY" "<base64 of 16 bytes>"}' > env.local.edn
+clojure -M:demo [port]
+clojure -T:build demo-uber && java -jar target/web-base-demo-0.1.0.jar [port]
 ```
 
 ## Development

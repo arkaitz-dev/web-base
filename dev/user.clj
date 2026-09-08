@@ -1,7 +1,8 @@
 (ns user
   "REPL workflow for the demo: (go) starts the system, (reset) reloads changed
-  namespaces and restarts it, (halt) stops it. Needs WB_SESSION_KEY in the
-  environment."
+  namespaces and restarts it, (halt) stops it. The session key comes from
+  WB_SESSION_KEY, or from `env.local.edn` in the directory the REPL was
+  started in."
   (:require [demo.main :as main]
             [integrant.repl :as ig-repl]
             [integrant.repl.state :as state]))

@@ -57,7 +57,9 @@
 
 (defn demo-uber
   "A runnable jar of the demo application, for trying it without a Clojure
-  toolchain: `WB_SESSION_KEY=… java -jar <jar> [port]`. It is never published
+  toolchain: `WB_SESSION_KEY=… java -jar <jar> [port]`, or the same with the
+  key in an `env.local.edn` in the directory it is started from — where no
+  `.gitignore` protects it, so the warn line is the only signal. Never published
   — the demo is the acceptance test (SPEC §8), and the library jar built by
   `jar` still contains none of it."
   [_]

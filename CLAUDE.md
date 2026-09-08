@@ -33,6 +33,7 @@ clojure -T:build jar                  # library jar → target/web-base-0.1.0.ja
 clojure -T:build install              # jar + pom into ~/.m2; consumed by :mvn/version (verified from another project)
 clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD (not run yet: needs credentials)
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
+clojure -M:demo [port]                # the same, with the key in ./env.local.edn (git-ignored)
 clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.1.0.jar (18 MB, never published)
 WB_SESSION_KEY=<base64 of 16 bytes> java -jar target/web-base-demo-0.1.0.jar [port]
 clojure -M:dev                        # REPL with dev/user.clj: (go) (reset) (halt) (store)
@@ -103,6 +104,11 @@ has to be opened deliberately. **Every one of these fails silently.**
 - **Never generate the session signing key at startup.** Works beautifully in
   development; destroys every session on every deploy, and differs per instance. Fail
   loudly when it is missing (SPEC §11).
+- **Never look for a configuration file the host did not name.** A base that knows a
+  file name can look for it, and then the directory a process was started from decides
+  the signing key. `config/env-file-readers` reads the path it is given and nothing
+  else. The scan in `dependencies_test` only catches an EDN file name written into
+  `src/`; the condition itself is a review rule (SPEC §11).
 - **Rotate the session id on login.** The defence against session fixation. The
   mechanism belongs to the base but only the auth module knows when someone has just
   authenticated, so the base must *expose* rotation and the consumer must call it.

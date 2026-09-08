@@ -502,4 +502,48 @@ without keying on `:wb/locale`, and never read the language from anywhere but th
 request — the htmx fragment that arrives a second later carries the same headers and
 must land in the same language.
 
+## 15 · Web security — settled 2026-09-08, during implementation
+
+Raised by the author: the base must carry the web security measures that are not
+authentication or authorisation (those stay in the auth module and the domain, §5).
+
+**What the design already gave, because §11 and §9 demanded it:** the session cookie is
+`Secure`, `HttpOnly` and `SameSite=Lax` by default and its key is never generated at
+startup; session rotation is exposed for the login; no exception message and nothing
+from the request reaches an error response; the gate answers htmx with `HX-Redirect`;
+Hiccup escapes every string and attribute unless the host says `raw`; Ring's resource
+handler refuses `..` and symlinks outside the root; the access line never logs the
+query string.
+
+**What Ring does not ship**, checked 2026-09-08 in the jars: `ring-core` carries no
+security headers and no CSRF protection. They live in sibling libraries by the same
+author — `ring-anti-forgery` (synchroniser token kept in the session, `X-CSRF-Token`
+header, constant-time comparison), `ring-headers`, `ring-ssl` — and `ring-defaults`
+bundles them with an order of its own, which would fight the explicit wiring that is
+this base's product.
+
+### What the base carries
+
+- **Response headers**, added only when the response lacks them, on every response
+  including static assets and errors: `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`;
+  `Strict-Transport-Security` only when the host says there is TLS in front.
+- **Content-Security-Policy** as the host's own string, with a **per-request nonce**
+  substituted and placed on the request, so the shell can mark its own `<script>`.
+  Written down so it is not rediscovered: htmx's `hx-on`, `hx-vals js:` and trigger
+  filters need `unsafe-eval` or the `hx-csp` extension; a strict policy means not using
+  them. The demo ships a strict policy and does without them.
+- **CSRF**: `ring-anti-forgery` integrated, on by default, refusal rendered as the
+  base's 403 error (a fragment inside an htmx swap, a page otherwise). The shell puts
+  the token in `hx-headers` on `<body>` so every htmx request carries it; classic forms
+  get a helper for the hidden field. Recorded honestly: `SameSite=Lax` and the custom
+  header htmx already sends block cross-site requests in current browsers; the token is
+  defence in depth, and the price of it is one small dependency on `ring-core` alone.
+- **Behind a proxy**, opt-in: scheme and client address from `X-Forwarded-Proto` and
+  `X-Forwarded-For`, only when the host says the proxy is trusted.
+
+**Out, by §5 and §6:** rate limiting, lockout after failed attempts, password hashing,
+second factors, authorisation, audit trails. Request size limits stay Jetty's defaults
+(200 KB forms, 8 KB headers), documented rather than wrapped.
+
 *(Nothing remains open in this document; what is left is implementation.)*

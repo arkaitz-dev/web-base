@@ -55,17 +55,39 @@ strongly: it receives a predicate and obeys it.
 
 ## Traps already identified — do not rediscover them
 
+Kept here rather than only in `SPEC.md` because this file loads by itself and the spec
+has to be opened deliberately. **Every one of these fails silently.**
+
 - **`HX-Redirect`.** Answering an htmx request with a `302` makes htmx follow the
   redirect and plant the login page inside the target `div`. The gate must translate a
   refusal into the right outcome per request kind.
 - **Fragment vs full page** is decided from the `HX-Request` header **by the base**, not
-  by the handler — otherwise every route gets duplicated.
+  by the handler — otherwise every route gets duplicated. With nested layouts the
+  question is not binary but *from what height of the layout stack* (SPEC §12).
 - **Errors are data with several renderings** (page, fragment, plain text). An error
   inside an htmx swap must not return a whole page.
+- **Never generate the session signing key at startup.** Works beautifully in
+  development; destroys every session on every deploy, and differs per instance. Fail
+  loudly when it is missing (SPEC §11).
+- **Rotate the session id on login.** The defence against session fixation. The
+  mechanism belongs to the base but only the auth module knows when someone has just
+  authenticated, so the base must *expose* rotation and the consumer must call it.
+  Unsaid, it does not get done, and it produces no symptom (SPEC §11).
+- **Keep the htmx coupling in three named, isolated places** — `HX-Request`,
+  `HX-Redirect`, the error renderer. Not an abstraction layer to support alternatives;
+  simply do not scatter `HX-` strings through the codebase (SPEC §9).
+- **Do not build a layout engine.** No `deflayout` macro, no registry, no inheritance.
+  Layouts are functions and nesting is composition; route data carries the stack. **If a
+  macro seems necessary here, the whole argument for Hiccup has been lost** (SPEC §12).
 
 ## The demo is the acceptance test
 
 web-base ships a tiny demo application using nothing but web-base. It is not a showcase:
 **if the demo needs anything web-base does not provide, the seam is in the wrong
 place.** When the extraction is done, what remains of `../prueba` — store, todos, search,
-signup — is that demo.
+signup — is that demo, and **it lives in this repository**, not next door: the demo is
+part of what web-base ships.
+
+⚠ **`../prueba` is versioned but has no remote** — it exists only on this machine, and
+the extraction plan depends on it. Losing it turns "extract" into "rewrite from a
+specification".

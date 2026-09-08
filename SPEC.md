@@ -261,9 +261,50 @@ have no business showing.
 With the caution not to over-purify: **a base with no opinions is not a base.** Removing
 Ring and the routing would remove its reason to exist.
 
-## 11 · Still open
+## 11 · Sessions
 
-- **Where sessions live** — a signed cookie, or server-side with a store the host
-  supplies as a port.
+**The question is interesting because it collides with §2**, which says the base *never
+opens a database* — and a revocable session must, by definition, be kept somewhere on
+the server.
+
+**The port need not be invented: Ring already defines one.** Its session store protocol
+is `read-session` / `write-session` / `delete-session`, and the neat part is that
+**`cookie-store` is one implementation of it**: instead of looking a session up by id, it
+encodes the state into the signed key itself. Ring already unified both mechanisms behind
+one port.
+
+So **web-base uses that protocol as its port**, ships **`cookie-store` as the default** —
+so the demo runs with no infrastructure at all — and the host plugs in whatever it wants.
+No database is opened, nothing is imposed, and both mechanisms remain available.
+
+### The real choice is not where it is kept, but whether it can be revoked
+
+**A cookie session cannot be killed from the server.** The cookie stays valid until it
+expires, whatever you do. That meets what was established about magic links: the link
+attests **control of a mailbox**, and that leap is the weakest link in the whole chain.
+The day an user with reach over sixty accounts has their mailbox
+compromised, *"end their session now"* must have an answer. With a cookie store it has
+none.
+
+So **the first consumer will most likely want a server-side store**, even though the base defaults to
+a cookie. That is the intended division: the base carries what makes the demo run, the
+consumer supplies what its own risk demands.
+
+### Two traps, written down before they exist
+
+**Never generate the signing key at startup.** It is tempting — no key configured, so
+generate a random one and carry on. It works beautifully in development and **destroys
+every session on every deployment** in production, and worse, differs per instance when
+there is more than one. **The base must fail loudly when the key is missing**, not cope.
+
+**Rotate the session id on login.** The defence against session fixation, and it has a
+division problem: the mechanism belongs to the base, but **only the auth module knows
+when someone has just authenticated**. So the base must **expose "rotate this session"**
+in its API and document that the consumer is required to call it. Unsaid, it does not get
+done — and it produces no symptom at all.
+
+## 12 · Still open
+
 - **What a "subject" is** to the base. Probably an opaque value it never inspects.
+
 *(Theming was settled in §10: structural CSS plus custom properties.)*

@@ -541,10 +541,15 @@ this base's product.
   them. The demo ships a strict policy and does without them.
 - **CSRF**: `ring-anti-forgery` integrated, on by default, refusal rendered as the
   base's 403 error (a fragment inside an htmx swap, a page otherwise). The shell puts
-  the token in `hx-headers` on `<body>` so every htmx request carries it; classic forms
-  get a helper for the hidden field. Recorded honestly: `SameSite=Lax` and the custom
-  header htmx already sends block cross-site requests in current browsers; the token is
-  defence in depth, and the price of it is one small dependency on `ring-core` alone.
+  the token in `hx-headers:inherited` on `<body>` — htmx 4 inherits nothing without the
+  modifier — so every htmx request carries it; classic forms get a helper for the
+  hidden field. Recorded honestly: `SameSite=Lax` and the custom header htmx already
+  sends block cross-site requests in current browsers; the token is defence in depth,
+  and the price of it is one small dependency on `ring-core` alone.
+- **Static assets answer before the session.** The base's `/wb/` files and the host's
+  own assets are served from outside the session, CSRF and locale layers: a stylesheet
+  fetch never reads the store nor mints a session cookie, and a shared cache may keep
+  the file. They still carry the request id and the headers above.
 - **Behind a proxy**, opt-in: scheme and client address from `X-Forwarded-Proto` and
   `X-Forwarded-For`, only when the host says the proxy is trusted.
 

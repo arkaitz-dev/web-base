@@ -1,0 +1,72 @@
+/* web-base structural stylesheet (SPEC §10).
+ *
+ * Only what the shell itself emits is styled here — header, nav, identity,
+ * main, footer — plus the error fragment. No brand: every colour and the
+ * type face are custom properties the host redefines; the values below are
+ * neutral defaults so the demo is legible with nothing else. Everything
+ * beyond this layer belongs to the host's own stylesheet. */
+
+:root {
+  --wb-bg: #ffffff;
+  --wb-text: #1f1f1f;
+  --wb-muted: #6b6b6b;
+  --wb-border: #d9d9d9;
+  --wb-accent: #2b5aa0;
+  --wb-danger: #a32c2c;
+  --wb-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --wb-measure: 48rem;
+  --wb-gap: 1rem;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+  font: 16px/1.5 var(--wb-font);
+}
+
+.wb-header, .wb-nav, .wb-identity, .wb-main, .wb-footer {
+  max-width: var(--wb-measure);
+  margin-inline: auto;
+  padding-inline: var(--wb-gap);
+}
+
+.wb-header { padding-block: var(--wb-gap); }
+
+.wb-nav {
+  display: flex;
+  gap: var(--wb-gap);
+  border-bottom: 1px solid var(--wb-border);
+  padding-block: calc(var(--wb-gap) / 2);
+}
+
+.wb-nav a { color: var(--wb-accent); text-decoration: none; }
+.wb-nav a[aria-current="page"] { font-weight: 600; }
+
+.wb-identity {
+  color: var(--wb-muted);
+  font-size: 0.9rem;
+  text-align: end;
+  padding-block: calc(var(--wb-gap) / 2);
+}
+
+.wb-main { padding-block: var(--wb-gap); }
+
+.wb-footer {
+  color: var(--wb-muted);
+  font-size: 0.85rem;
+  border-top: 1px solid var(--wb-border);
+  padding-block: var(--wb-gap);
+}
+
+.wb-error {
+  border: 1px solid var(--wb-danger);
+  border-inline-start-width: 4px;
+  padding: calc(var(--wb-gap) / 2) var(--wb-gap);
+}
+
+.wb-error-status { color: var(--wb-danger); }
+.wb-error-title { margin-inline-start: 0.5em; }
+.wb-error-detail { margin: 0.25em 0 0; color: var(--wb-muted); }

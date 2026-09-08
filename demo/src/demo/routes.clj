@@ -4,7 +4,8 @@
   (:require [demo.handlers :as handlers]
             [demo.schema :as schema]
             [demo.views :as views]
-            [dev.arkaitz.web-base :as wb]))
+            [dev.arkaitz.web-base :as wb]
+            [dev.arkaitz.web-base.htmx :as htmx]))
 
 (defn routes [store]
   [["" {:wb/layouts [views/shell]}
@@ -30,8 +31,10 @@
     ["/lang" {:post {:handler handlers/switch-language}}]
     ["/private" {:wb/gate wb/subject-present?
                  :get {:handler handlers/private}}]
+    ;; The base's classifier, not the raw header: a history restore sends
+    ;; HX-Request too and must get the page back, not the deliberate error.
     ["/boom" {:get {:handler (fn [request]
-                               (if (= "true" (get-in request [:headers "hx-request"]))
+                               (if (htmx/partial-request? request)
                                  (handlers/boom request)
                                  (handlers/boom-page request)))}}]
     ["/throw" {:get {:handler handlers/boom}}]

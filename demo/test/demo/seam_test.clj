@@ -110,3 +110,19 @@
     (is (and (str/includes? (:body add) "uno") (str/includes? (:body add) "dos")))
     (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (mock/header "Cookie" cookie) (mock/header "HX-Request" "true")))))
         "without the token: the base's 403")))
+
+(deftest boom-is-the-page-on-a-history-restore-and-the-500-fragment-on-a-swap
+  ;; htmx sends HX-Request on a history restore too, with HX-Request-Type
+  ;; "full": the route classifies with the base, never with the raw header.
+  (let [app     (app)
+        restore (get* app "/boom" "HX-Request" "true" "HX-Request-Type" "full")
+        swap    (get* app "/boom" "HX-Request" "true")]
+    (is (= 200 (:status restore)) "history restore of /boom: the boom page, not the 500 page")
+    (is (str/starts-with? (:body restore) "<!DOCTYPE html>\n<html lang=\"es\">") "a whole document")
+    (is (str/includes? (:body restore) "<title>Error deliberado · demo de web-base</title>")
+        "the boom page's own <title>: the nav names it on every page, the 500 page included")
+    (is (str/includes? (:body restore) "<div id=\"boom-target\">") "with the button's target")
+    (is (not (str/includes? (:body restore) "wb-error")) "and no error fragment")
+    (is (= [500 "<div class=\"wb-error\" data-status=\"500\"><strong class=\"wb-error-status\">500</strong></div>"]
+           [(:status swap) (:body swap)])
+        "a swap of /boom: exactly the base's 500 fragment")))

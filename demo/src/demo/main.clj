@@ -5,11 +5,21 @@
   (:gen-class)
   (:require [clojure.java.io :as io]
             [demo.system]
+            [dev.arkaitz.web-base.config :as config]
             [dev.arkaitz.web-base.integrant :as wbi]
             [integrant.core :as ig]))
 
-(defn read-config []
-  (wbi/read-string (slurp (io/resource "config.edn"))))
+(def env-file
+  "Where the demo looks for the variables `config.edn` needs, so a development
+  machine does not export them on every start. Out of the repository by
+  `.gitignore`'s `*.local.edn`; absent, the environment is the only source."
+  "env.local.edn")
+
+(defn read-config
+  ([] (read-config env-file))
+  ([env-file]
+   (wbi/read-string (config/env-file-readers env-file)
+                    (slurp (io/resource "config.edn")))))
 
 (defn- with-port
   "The config with the port replaced, or nil when the argument is not a

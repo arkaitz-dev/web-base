@@ -29,13 +29,13 @@ and observed to work**, never from convention. Observed:
 ```
 clojure -M:test                       # whole suite incl. demo/test; exit ≠ 0 on failure
 clojure -M:test -n <namespace>        # one namespace (several -n allowed)
-clojure -T:build jar                  # library jar → target/web-base-0.1.0.jar (no demo inside)
+clojure -T:build jar                  # library jar → target/web-base-0.2.0.jar (no demo inside)
 clojure -T:build install              # jar + pom into ~/.m2; consumed by :mvn/version (verified from another project)
 clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD (not run yet: needs credentials)
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
 clojure -M:demo [port]                # the same, with the key in ./env.local.edn (git-ignored)
-clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.1.0.jar (18 MB, never published)
-WB_SESSION_KEY=<base64 of 16 bytes> java -jar target/web-base-demo-0.1.0.jar [port]
+clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.2.0.jar (18 MB, never published)
+WB_SESSION_KEY=<base64 of 16 bytes> java -jar target/web-base-demo-0.2.0.jar [port]
 clojure -M:dev                        # REPL with dev/user.clj: (go) (reset) (halt) (store)
 ```
 

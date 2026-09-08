@@ -191,10 +191,79 @@ And §8 comes free: strip the base out and what remains — store, todos, search
    logging altogether — convenient in a toy, incompatible with §6. That dependency has
    to become a real backend.
 
-## 10 · Still open
+## 10 · Dependencies: impose what you are, not what you use
+
+Raised by the author against an earlier, sloppier argument of the assistant's — that
+Garden should be avoided because it "imposes a dependency". That distinguishes nothing:
+every library imposes one. The usable criterion is different.
+
+> **Does the dependency appear in the *consumer's own code*, or does it stay inside the
+> base?**
+
+By that measure ours are not alike:
+
+**Shallow — the consumer never writes them:**
+
+- **Jetty** lives entirely behind the base. The consumer never sees it.
+- **Hiccup** — a view returns **plain Clojure vectors and maps**. Nobody requires hiccup
+  to write one; only the renderer touches it, inside the base. **The contract is data.**
+- **Reitit** — routes are **plain data**. Reitit-shaped, but still vectors and maps.
+
+**Deep — they shape the consumer's own code:**
+
+- **Integrant** would make the consumer write `defmethod ig/init-key`, turn their
+  components into multimethods keyed by namespaced keywords, and their configuration
+  into EDN with `#ig/ref`. It is also the closest thing in the stack to inversion of
+  control, since `ig/init` calls your methods.
+- **Malli** would appear wherever the consumer declares a schema.
+- **Garden** would appear wherever the consumer wants to restyle anything.
+
+### The cost of an imposition
+
+Popularity is **not** the criterion — Django was popular and well-liked, and that did
+not make `contrib.auth` liftable. What popularity changes is not whether the imposition
+exists but **what it costs**:
+
+> **cost = depth × probability of disagreement**
+
+Almost nobody objects to malli. **Everybody has opinions about CSS.** So Garden and
+malli are not the same case even though both are deep: styling is maximally contested
+ground, data validation is not.
+
+### And the distinction that resolves it
+
+**Using a library internally has nothing to do with imposing it.** Only **the contract**
+matters. With that, neither has to be given up:
+
+- **Malli** — nothing need be decided. Reitit supports coercion with malli, spec or
+  schema, so **the base passes coercion through** and the consumer chooses. We use malli
+  in our own consumers because we like it; web-base obliges no one. Zero cost, imposition
+  gone.
+- **Integrant** — the answer is not to drop it but **not to make it load-bearing**. The
+  base exposes ordinary start and stop functions, and **ships an optional namespace with
+  the `init-key` methods**. Whoever uses integrant gets it free; whoever does not is not
+  blocked. This is what well-behaved Clojure libraries do.
+- **CSS** — the base ships **structural CSS only**, no brand colours or typography, and
+  exposes the theming seam as **CSS custom properties** (`--wb-bg`, `--wb-text`, …) that
+  the consumer redefines. No dependency, no build step. The consumer may then use
+  Garden, Tailwind or hand-written CSS, and **the base never finds out**. *(This also
+  closes the "how is the shell themed" question that was open here.)*
+
+### The rule, in full
+
+> **Impose what you are; do not impose what you use. And what you use, use without
+> apology.**
+
+web-base **is** a routing-and-shell layer, so reitit-shaped route data is legitimately
+its contract. It merely **uses** a lifecycle mechanism and a schema library, and those
+have no business showing.
+
+With the caution not to over-purify: **a base with no opinions is not a base.** Removing
+Ring and the routing would remove its reason to exist.
+
+## 11 · Still open
 
 - **Where sessions live** — a signed cookie, or server-side with a store the host
   supplies as a port.
 - **What a "subject" is** to the base. Probably an opaque value it never inspects.
-- **How the shell is themed** without web-base learning anything about the consumer's
-  brand.
+*(Theming was settled in §10: structural CSS plus custom properties.)*

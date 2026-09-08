@@ -15,13 +15,15 @@
 
 (def mdc-key "request-id")
 
-(def ^:private ^SecureRandom random (SecureRandom.))
+;; A delay, not a value: a SecureRandom in a Var root is baked into a
+;; GraalVM native image at build time, seed and all.
+(def ^:private random (delay (SecureRandom.)))
 
 (defn- new-id
   "96 random bits as 16 url-safe characters."
   []
   (let [bytes (byte-array 12)]
-    (.nextBytes random bytes)
+    (.nextBytes ^SecureRandom @random bytes)
     (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes)))
 
 (defn- access-line [request status elapsed-ns]

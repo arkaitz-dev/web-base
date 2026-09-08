@@ -44,10 +44,10 @@
              (= (str exempt-ns) (str x))))))
 
 (defn- offenders
-  "Every integrant reference inside one form: symbols and keywords naming the
-  library or the exempt namespace, and tags in integrant's `ig` namespace.
-  Walks quoted forms, reader conditionals (both branches) and tagged literals."
-  [form]
+  "Every reference `name?` accepts inside one form, plus tags in integrant's
+  `ig` namespace. Walks quoted forms, reader conditionals (both branches) and
+  tagged literals."
+  [name? form]
   (let [found (atom [])]
     (letfn [(walk [x]
               (cond
@@ -57,7 +57,7 @@
                                         (walk (:form x)))
                 (map? x) (doseq [[k v] x] (walk k) (walk v))
                 (coll? x) (doseq [y x] (walk y))
-                (integrant-name? x) (swap! found conj x)))]
+                (name? x) (swap! found conj x)))]
       (walk form))
     @found))
 
@@ -82,7 +82,7 @@
             ;; a fallback for scalar top-level forms, which carry no metadata.
             (recur (conj forms {:line (or (:line (meta form)) line) :form form}))))))))
 
-(defn- scan [files]
+(defn- scan [name? files]
   (reduce (fn [acc [path ^File file]]
             (let [{:keys [forms error]} (try {:forms (read-all-forms file)}
                                              (catch Exception e {:error (.getMessage e)}))]
@@ -90,7 +90,7 @@
                 error (update acc :read-errors conj {:file path :error error})
                 :else (update acc :violations into
                               (for [{:keys [line form]} forms
-                                    offender (offenders form)]
+                                    offender (offenders name? form)]
                                 {:file path :line line
                                  :top-form (when (seq? form) (first form))
                                  :offender offender})))))
@@ -136,8 +136,44 @@
               (is (and (seq? form) (= 'ns (first form)) (= anchor-ns (second form)))
                   (str "first form of " anchor-path " is not (ns " anchor-ns " …): "
                        (pr-str form))))))
-        (let [{:keys [read-errors violations]} (scan (dissoc files exempt-path))]
+        (let [{:keys [read-errors violations]} (scan integrant-name? (dissoc files exempt-path))]
           (is (= [] read-errors)
               (str "could not read: " (pr-str read-errors)))
           (is (= [] violations)
               (str "integrant referenced outside " exempt-ns ": " (pr-str violations))))))))
+
+(def ^:private native-path "dev/arkaitz/web_base/native.clj")
+(def ^:private native-ns 'dev.arkaitz.web-base.native)
+
+(defn- native-name?
+  "The namespace named in full, and also the bare segment `native`, because
+  `(:require [dev.arkaitz.web-base [native :as n]])` loads it just as well
+  and spells no full name anywhere. The integrant guard catches its own
+  prefix-list form only because its library root is a single segment."
+  [x]
+  (and (or (symbol? x) (keyword? x))
+       (or (= (str native-ns) (str x))
+           (= (str native-ns) (namespace x))
+           (= "native" (name x)))))
+
+(deftest nothing-in-the-base-references-the-native-namespace
+  ;; Requiring it is the opt-in, exactly as for integrant: it installs a
+  ;; method on a multimethod that belongs to Ring, so a consumer who never
+  ;; asked must never get it. On a JVM the whole suite passes either way,
+  ;; which is why this scan is the only signal.
+  (let [root (src-root)]
+    (is (some? root) "precondition: the sources were located through the classpath")
+    (when root
+      (let [files (source-files root)]
+        (is (contains? files native-path)
+            (str "precondition: " native-path " is among the scanned sources"))
+        ;; The walk was parameterised so two guards share it, which is the
+        ;; edit that can neuter one while the other stays green.
+        (is (seq (offenders native-name? '(ns x (:require [dev.arkaitz.web-base.native]))))
+            "positive control: the guard fires on the plain require")
+        (is (seq (offenders native-name? '(ns x (:require [dev.arkaitz.web-base [native :as n]]))))
+            "positive control: and on the prefix list, which loads it just the same")
+        (let [{:keys [read-errors violations]} (scan native-name? (dissoc files native-path))]
+          (is (= [] read-errors) (str "could not read: " (pr-str read-errors)))
+          (is (= [] violations)
+              (str native-ns " referenced outside itself: " (pr-str violations))))))))

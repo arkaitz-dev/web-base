@@ -17,13 +17,14 @@
    "X-Frame-Options"        "DENY"
    "Referrer-Policy"        "strict-origin-when-cross-origin"})
 
-(def ^:private ^SecureRandom random (SecureRandom.))
+;; See log.clj: a delay keeps it out of the image.
+(def ^:private random (delay (SecureRandom.)))
 
 (defn- nonce
   "128 random bits, base64: the value CSP expects after `nonce-`."
   []
   (let [bytes (byte-array 16)]
-    (.nextBytes random bytes)
+    (.nextBytes ^SecureRandom @random bytes)
     (.encodeToString (Base64/getEncoder) bytes)))
 
 (defn- hsts-value [hsts]

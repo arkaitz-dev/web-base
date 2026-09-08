@@ -309,6 +309,9 @@ machine, the same application both ways:
 | native binary | 41 ms | 25 MB |
 | JVM | 625 ms | 220 MB |
 
+The very first run of a freshly built binary takes about a second on macOS,
+which is the system verifying it, not the program starting: run it twice.
+
 Require `dev.arkaitz.web-base.native` from your main namespace — like the
 Integrant one, requiring it is the opt-in — put
 `com.github.clj-easy/graal-build-time` on the classpath, AOT-compile your main

@@ -88,6 +88,7 @@ place.** When the extraction is done, what remains of `../prueba` — store, tod
 signup — is that demo, and **it lives in this repository**, not next door: the demo is
 part of what web-base ships.
 
-⚠ **`../prueba` is versioned but has no remote** — it exists only on this machine, and
-the extraction plan depends on it. Losing it turns "extract" into "rewrite from a
-specification".
+*`../prueba` is versioned but has no remote, and the author is content with that: it was
+an experiment, and what mattered from it — the stack, the patterns, the discipline — is
+already captured in `SPEC.md`. Extracting from it is a convenience, not a dependency. If
+it is gone, build from the spec.*

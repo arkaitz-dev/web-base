@@ -37,6 +37,9 @@ out/
 !.env.example
 *.local.edn
 
+# Browser-automation artefacts (Playwright MCP snapshots from smoke runs)
+.playwright-mcp/
+
 # Editors
 .idea/
 *.iml

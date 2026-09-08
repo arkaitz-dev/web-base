@@ -19,24 +19,42 @@ them.
 
 ## Project state
 
-**Implementation in progress**, as an **extraction from `../prueba`** — a working
-prototype that already covers most of the scope — not a fresh start. See `SPEC.md` §9.
-The implementation plan lives outside the repository (Claude plan file
-`joyful-tinkering-gadget.md`); the commit history is the record of completed steps.
+**Implemented** (2026-09-08) as an **extraction from `../prueba`**; the commit history
+is the record, one step per commit. Every namespace under `src/dev/arkaitz/web_base/`
+is one seam of `SPEC.md` §6–§15, and `src/dev/arkaitz/web_base.clj`'s docstring is the
+wiring order — read it before touching the stack. The demo under `demo/` is the
+acceptance test (SPEC §8) and never enters the jar.
 
 Build, test and REPL commands are recorded here **only once they have actually been run
-and observed to work**, never from convention. Observed so far:
+and observed to work**, never from convention. Observed:
 
 ```
-clojure -M:test                       # whole suite, cognitect test-runner, exit ≠ 0 on failure
-clojure -M:test -n <namespace>        # one test namespace
+clojure -M:test                       # whole suite incl. demo/test; exit ≠ 0 on failure
+clojure -M:test -n <namespace>        # one namespace (several -n allowed)
 clojure -T:build jar                  # library jar → target/web-base-0.1.0.jar (no demo inside)
+WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
+clojure -M:dev                        # REPL with dev/user.clj: (go) (reset) (halt) (store)
 ```
 
-`test/dev/arkaitz/web_base/dependencies_test.clj` scans `src/` with the Clojure reader
-and fails if any namespace other than `dev.arkaitz.web-base.integrant` references
-integrant (SPEC §10). Because integrant is on the base classpath, that scan is the only
-signal such a require would ever produce.
+A key: `(dev.arkaitz.web-base.session/generate-key)` in any REPL, once, kept in the
+environment. The base refuses to invent one (SPEC §11).
+
+Test discipline in force here: every test was written under `/write-test` with a
+contract, watched go red by named mutations, and the security-adjacent ones
+(session, gate, errors, security, assembly) through a mixed-model review panel.
+`test/resources/logback-test.xml` keeps INFO enabled with no appender: the MDC tests
+need a real SLF4J backend. `dependencies_test.clj` scans `src/` with the reader and
+fails if any namespace other than `dev.arkaitz.web-base.integrant` references
+integrant — the only signal such a require would ever produce.
+
+Browser smoke of the demo (done through Playwright on 2026-09-08, repeat after
+touching views or the shell): tab swap leaves one `#app`; add a todo over htmx; invalid
+signup re-renders inside the form; `/boom` button swaps the 500 into its target;
+login → `/private` names the subject; language switch; back button restores a whole
+page; console free of CSP violations.
+
+Known limitation: htmx 4's `hx-on`, `hx-vals js:` and trigger filters need
+`unsafe-eval`; the demo runs a strict CSP and does without them.
 
 ## The two rules that must survive contact with code
 

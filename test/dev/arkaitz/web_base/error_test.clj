@@ -17,8 +17,8 @@
 (def ^:private text-req    (mock/header page-req "Accept" "text/plain"))
 
 (def ^:private VARY "HX-Request, HX-Request-Type, Accept")
-(def ^:private HTML {"Vary" VARY "Content-Type" "text/html; charset=utf-8"})
-(def ^:private TEXT {"Vary" VARY "Content-Type" "text/plain; charset=utf-8"})
+(def ^:private HTML {"Vary" VARY "Cache-Control" "no-store" "Content-Type" "text/html; charset=utf-8"})
+(def ^:private TEXT {"Vary" VARY "Cache-Control" "no-store" "Content-Type" "text/plain; charset=utf-8"})
 
 (defn- frag
   ([status] (frag status nil nil))

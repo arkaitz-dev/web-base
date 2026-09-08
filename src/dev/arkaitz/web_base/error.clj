@@ -74,7 +74,9 @@
   page rendering."
   [{:keys [error-layout]}]
   (let [page    (or error-layout default-page)
-        headers {"Vary" vary}]
+        ;; An error may depend on the session (a 403) and is never worth
+        ;; caching; a shared cache serving one to the next visitor is a leak.
+        headers {"Vary" vary "Cache-Control" "no-store"}]
     (fn [{:keys [status] :as datum} request]
       (check-datum! datum)
       (cond

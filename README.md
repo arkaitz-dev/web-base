@@ -1,5 +1,7 @@
 # web-base
 
+[![Clojars Project](https://img.shields.io/clojars/v/dev.arkaitz/web-base.svg)](https://clojars.org/dev.arkaitz/web-base)
+
 A super-micro-framework for server-rendered Clojure web applications: the
 operational plumbing a project plugs in so it does not reassemble it every time.
 Server-rendered HTML with [htmx 4](https://four.htmx.org) and
@@ -29,7 +31,7 @@ dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
                       :git/sha "<commit>"}
 ```
 
-[clojars.org/dev.arkaitz/web-base](https://clojars.org/dev.arkaitz/web-base)
+The badge at the top is the version actually published.
 
 The library depends on `metosin/reitit-ring`, `hiccup`, `ring-jetty-adapter`,
 `tools.logging`, `tempura`, `ring-anti-forgery` and `integrant` — and nothing

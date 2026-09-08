@@ -383,6 +383,17 @@ already in use.
 innermost layer**; absent → **the whole stack**. The handler names the intermediate cases
 on the rare occasions they arise. Nothing more.
 
+*Wording settled 2026-09-08, during implementation.* "The innermost layer" is **the
+handler's own markup with no layout at all** — the intermediate cases only make sense if
+the two named cases are the extremes, and in the prototype five of six htmx routes want
+exactly that. The intermediate case — a swap that wants the section but not the shell —
+is named by the handler as a height counted from the innermost layout, and **what it
+names is obeyed on both kinds of request**: a full navigation with an explicit height
+below the stack gets exactly that, without a doctype. And under htmx 4 "`HX-Request`
+present" is not enough on its own: a history restore and a body-targeted swap also carry
+it and want the whole document, which they say with `HX-Request-Type: full`. The base
+reads both headers, in one place.
+
 ### The one way to spoil this
 
 **Do not build a layout engine.** The temptation will be a `deflayout` macro, a registry,

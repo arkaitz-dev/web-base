@@ -38,9 +38,10 @@ schema yourself.
 
 - **Routing and a page shell.** Routes are reitit data. A route declares its
   layout stack in route data (`:wb/layouts`, outermost first; nested routes
-  concatenate). Handlers return a Ring response whose `:body` is Hiccup; the
-  base renders it through the stack — the whole stack for a navigation, nothing
-  for an htmx swap, or exactly the height the handler names with `:wb/height`.
+  concatenate). Handlers return a Ring response whose `:body` is Hiccup —
+  `response/ok` builds it; the base renders it through the stack — the whole
+  stack for a navigation, nothing for an htmx swap, or exactly the height the
+  handler names with `:wb/height`.
 - **A gate that speaks htmx.** Per route, `:wb/gate` is a predicate over the
   request. A refusal becomes a `303` for a navigation, an `HX-Redirect` for an
   htmx swap (never a `302` htmx would follow into its target), or a `403` when a
@@ -55,7 +56,10 @@ schema yourself.
   every request, `<html lang>` that never lies.
 - **Web security**: `nosniff`, `X-Frame-Options`, `Referrer-Policy`, optional
   HSTS, a per-request CSP nonce, CSRF through ring-anti-forgery, opt-in proxy
-  headers. Static assets answer before the session.
+  headers. Static assets answer before the session, and answer a conditional
+  GET with `304`.
+- **Test helpers** for the host's own suite: the cookies a response set, the
+  CSRF token a page carries, a request shaped like an htmx swap.
 - **Lifecycle** as plain `start`/`stop` functions; an optional Integrant
   namespace for hosts that use it.
 
@@ -66,6 +70,7 @@ What it does not do: authenticate, authorise, persist, or know your domain.
 ```clojure
 (ns my.app
   (:require [dev.arkaitz.web-base :as wb]
+            [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.shell :as shell]
             [reitit.coercion.malli :as malli-coercion]))
@@ -77,24 +82,24 @@ What it does not do: authenticate, authorise, persist, or know your domain.
                      :identity (if-let [who (:wb/subject request)] (str "hi, " who) "anonymous")
                      :content  content)))
 
-(defn home [_request]
-  {:status 200 :body [:p "Hello"]})
+(defn home [{:keys [wb/tr]}]
+  (response/ok [:p (tr :hi)]))
 
 (defn private [request]
-  {:status 200 :body [:p (str "Only you, " (:wb/subject request))] :wb/slots {:title "Private"}})
+  (response/ok [:p (str "Only you, " (:wb/subject request))] {:slots {:title "Private"}}))
 
 (defn login [request]
   ;; the host authenticates however it likes; the base only learns a subject exists
-  (session/rotate {:status 303 :headers {"Location" "/private"} :body ""}
+  (session/rotate (response/see-other "/private")
                   (assoc (:session request) :subject (get-in request [:form-params "name"]))))
 
 (def app
   (wb/handler
    {:routes     [["" {:wb/layouts [my-shell]}
-                  ["/" {:get {:handler home}}]
-                  ["/login" {:post {:handler login}}]
+                  ["/" {:get home}]
+                  ["/login" {:post login}]
                   ["/private" {:wb/gate wb/subject-present?
-                               :get {:handler private}}]]]
+                               :get private}]]]
     :coercion   malli-coercion/coercion
     :subject-fn #(get-in % [:session :subject])
     :login-path "/login"
@@ -103,8 +108,12 @@ What it does not do: authenticate, authorise, persist, or know your domain.
     :i18n       {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en}
     :security   {:csp "default-src 'self'; script-src 'nonce-{nonce}'"}}))
 
-(def server (wb/start app {:port 3000}))   ; => {:server … :port 3000}; (wb/stop server)
+(def server (wb/start #'app {:port 3000}))   ; => {:server … :port 3000}; (wb/stop server)
 ```
+
+A method's value is the handler itself or a map with `:handler` and reitit's
+`:parameters`. Passing the var `#'app` lets a REPL redefine `app` without
+restarting Jetty.
 
 Generate a key once, in a REPL, and keep it in the environment:
 
@@ -120,7 +129,7 @@ on every deploy, silently.
 | key | meaning |
 |---|---|
 | `:routes` | reitit route data (required) |
-| `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs` and `:cookie-name` optional |
+| `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs` and `:cookie-name` (default `ring-session`) optional |
 | `:subject-fn` | request → subject or nil; default: always nil |
 | `:login-path` | where a refusal without a subject goes; required iff a route has `:wb/gate` |
 | `:coercion` | a reitit coercion, passed through |
@@ -141,6 +150,36 @@ request-id → security headers → proxy (opt-in) → [assets] → session → 
 → i18n → csrf → subject → router: error → gate → render → coercion → handler
 ```
 
+A route may add its own `:middleware` in route data; reitit merges it
+**innermost**, inside the base's four, so it wraps the handler only. It sees
+a handler's exception before `error` does; it does not see a layout, gate or
+coercion failure, nor the default 404. `:middleware ^:replace […]` replaces the
+base's four as well, silently. Three things a host may want there:
+
+- a stack trace in the browser during development — `ring-devel`'s
+  `wrap-stacktrace`, or your own catcher; in production a 500 is logged with its
+  stack under the request id the response carries in `X-Request-Id`;
+- `ring.middleware.flash/wrap-flash` — with a hazard: it consumes the flash on
+  any request that carries it, so an htmx fragment (a poll, a keyup in flight)
+  arriving between the 303 and the navigation eats the message. Consume it only
+  when `(not (htmx/partial-request? request))`;
+- `ring.middleware.keyword-params/wrap-keyword-params` — note Ring's merged
+  `:params` lets a query-string key shadow a form field; reitit's `:parameters`
+  give typed, keyword access without that.
+
+### Responses
+
+`(response/ok body)` is `{:status 200 :body body}`; `(response/ok body {:slots m
+:height n})` adds `:wb/slots` and `:wb/height`. `(response/see-other path)` is
+the 303 after a classic form. A 404 or 403 the handler decides is
+`(error/throw! {:status 404})`: it reaches the error renderer, not the layouts.
+
+`:wb/height` is rarely written. A navigation renders the whole stack and an htmx
+swap renders none of it; name a height only for the case in between — a tab
+swap that wants its section but not the shell. It counts from the innermost
+layout, so an outer layout added later never invalidates a height already
+written.
+
 ### Layouts
 
 A layout is a function of one map of slots: `:content`, `:request`, plus whatever
@@ -150,6 +189,50 @@ such layout, with slots `:lang :title :head :header :nav :identity :content
 property you redefine) and `/wb/htmx.min.js`, and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it. Classic forms
 add `(security/csrf-field request)`.
+
+### Forms and validation
+
+Two roads, and they do not meet. Route `:parameters` with a coercion refuse an
+invalid request **before the handler**, as a `400` through the error renderer
+with the humanized explanation under `:wb/coercion` for your error layout. A
+form that must come back re-rendered with its errors is validated **in the
+handler** — with malli:
+
+```clojure
+(defn signup [request]
+  (let [values (select-keys (:form-params request) ["name" "email"])
+        parsed (m/decode Signup values (mt/string-transformer))]
+    (if-let [explanation (m/explain Signup parsed)]
+      (response/ok (signup-form values (me/humanize explanation)))
+      (response/see-other "/welcome"))))
+```
+
+### Internationalisation
+
+`:wb/tr` takes a resource id, `(tr :nav/home)`, an id with arguments,
+`(tr :greet ["Ann"])`, or Tempura's vector of ids with fallbacks,
+`(tr [:nav/home :nav/default])`. An id the dictionary lacks answers `nil` —
+no exception, no placeholder — so a missing translation shows as an empty
+element.
+
+### Testing a host
+
+`dev.arkaitz.web-base.testing` reads the shapes the base emits, so a host's
+tests need no regex of their own. With ring-mock:
+
+```clojure
+(let [page   (app (mock/request :get "/login"))
+      token  (testing/csrf-token page)              ; hidden field or the shell's body attribute
+      login  (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
+                      (testing/with-cookies page)))  ; the session cookie the page minted
+      swap   (app (-> (mock/request :get "/private") (testing/with-cookies login) testing/fragment))]
+  …)
+```
+
+`(testing/cookies response)` is the map behind `with-cookies`: every cookie a
+response set, with a deletion — `Max-Age` zero or less — as `nil`. `with-cookies`
+keeps the request's own jar, so chaining it across a flow does what a browser
+does.
 
 ### htmx
 

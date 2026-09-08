@@ -117,6 +117,20 @@ have to maintain separately, which is worse than not extracting it.
 doubt, leave it in the consumer. Moving code *into* a library later is cheap; getting
 it back *out* is not.
 
+*Considered and held on 2026-09-08, after a DX review, so nobody re-derives them:*
+flash messages in the base (an htmx fragment arriving between the 303 and the
+navigation eats the flash; the page-only form is a design decision, so a host
+recipe is documented instead); `:wb/slots` in route data (once titles are
+translated, nothing static is left to move, and "a slot as a function of the
+request" is §12's slope); a `:dev-errors?` switch (the log already carries the
+stack under the request id, and a disclosure knob whose wrong value has no symptom
+is the trap of §11 again); `wrap-keyword-params` (a third way to read input, with
+query-string shadowing); the router as handler metadata (no consumer names routes
+yet); `Cache-Control` on `/wb/` (no content hash in the path, so any `max-age`
+pins an old htmx after an upgrade); `not-found`/`forbidden` constructors (they
+would bypass the error renderer — `error/throw!` is that); a validation helper
+(couples the base to a schema library).
+
 ## 8 · Its own harness
 
 web-base ships a **tiny demo application** that uses nothing but web-base: a couple of

@@ -51,7 +51,8 @@ Browser smoke of the demo (done through Playwright on 2026-09-08, repeat after
 touching views or the shell): tab swap leaves one `#app`; add a todo over htmx; invalid
 signup re-renders inside the form; `/boom` button swaps the 500 into its target;
 login → `/private` names the subject; language switch; back button restores a whole
-page; console free of CSP violations.
+page, and back onto `/boom` shows the boom page, not the error; console free of CSP
+violations.
 
 Known limitation: htmx 4's `hx-on`, `hx-vals js:` and trigger filters need
 `unsafe-eval`; the demo runs a strict CSP and does without them.

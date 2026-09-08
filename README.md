@@ -21,13 +21,15 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 ## Coordinates
 
 ```clojure
-;; deps.edn — as a git dependency
+;; deps.edn — from Clojars
+dev.arkaitz/web-base {:mvn/version "0.1.0"}
+
+;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
                       :git/sha "<commit>"}
-
-;; or as a Maven artifact, once published
-dev.arkaitz/web-base {:mvn/version "0.1.0"}
 ```
+
+[clojars.org/dev.arkaitz/web-base](https://clojars.org/dev.arkaitz/web-base)
 
 The library depends on `metosin/reitit-ring`, `hiccup`, `ring-jetty-adapter`,
 `tools.logging`, `tempura`, `ring-anti-forgery` and `integrant` — and nothing
@@ -112,17 +114,49 @@ What it does not do: authenticate, authorise, persist, or know your domain.
 ```
 
 A method's value is the handler itself or a map with `:handler` and reitit's
-`:parameters`. Passing the var `#'app` lets a REPL redefine `app` without
-restarting Jetty.
+`:parameters`.
 
-Generate a key once, in a REPL, and keep it in the environment:
+### Sessions
+
+The session travels in a cookie signed with a 16-byte key. Generate one once, in
+a REPL, and keep it in the environment or in the file the last section of this
+README describes:
 
 ```clojure
-(dev.arkaitz.web-base.session/generate-key)
+(dev.arkaitz.web-base.session/generate-key)   ; => "AAECAwQFBgcICQoLDA0ODw=="
 ```
 
 The base refuses to invent one: a key generated at startup destroys every session
-on every deploy, silently.
+on every deploy, silently, and differs per instance when there is more than one.
+Changing the key later has the same effect on purpose — it is how you invalidate
+everything at once.
+
+**Rotate the session on login. This one is yours to call.** The mechanism belongs
+to the base and the moment belongs to you, because only your code knows when
+someone has just authenticated:
+
+```clojure
+(session/rotate (response/see-other "/private")
+                (assoc (:session request) :subject who))
+```
+
+It is the defence against session fixation, and skipping it produces no symptom
+at all: everything works, and an attacker who planted a session id before the
+login still holds a valid one after it.
+
+**On `http://localhost`, opt out of `Secure`.** The cookie carries
+`Secure`/`HttpOnly`/`SameSite=Lax` by default, and a browser drops a `Secure`
+cookie sent over plain HTTP without a word, so you get no session and no error:
+
+```clojure
+:session {:key … :cookie-attrs {:secure false}}   ; development only
+```
+
+The default is the safe one so that the opt-out is the thing you write, not the
+thing you forget. And note what the cookie store cannot do: a cookie session
+cannot be revoked from the server, it only expires. Pass your own `:store` — any
+implementation of Ring's session store protocol — when you need to end a session
+on demand.
 
 ### Configuration keys
 
@@ -241,6 +275,28 @@ The base's htmx coupling lives in three named places: the request classifier
 renderer. htmx 4 swaps every response, 4xx and 5xx included, so an error inside
 a swap lands inside its target. `hx-on`, `hx-vals js:` and trigger filters need
 `unsafe-eval`; under a strict CSP, do without them — the demo does.
+
+### Lifecycle
+
+```clojure
+(def server (wb/start #'app {:port 3000}))   ; => {:server <jetty> :port 3000}
+(wb/stop server)
+```
+
+`start` takes the handler and ring-jetty-adapter's options. `:port` is required,
+and `0` asks the operating system for a free one — which is why the handle
+carries the port back: with `:port 0` there is no other way to learn it without
+reaching into Jetty. `:join?` is forced to false whatever you pass, because a
+start that blocks its caller forever is a hang, not a server; keep the process
+alive yourself, and stop the server on the way out:
+
+```clojure
+(.addShutdownHook (Runtime/getRuntime) (Thread. #(wb/stop server)))
+```
+
+`stop` takes the handle `start` returned, not the Jetty object inside it. Passing
+the var `#'app` rather than `app` lets a REPL redefine the handler without
+restarting Jetty.
 
 ### Integrant
 

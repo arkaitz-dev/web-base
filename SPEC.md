@@ -217,6 +217,12 @@ And §8 comes free: strip the base out and what remains — store, todos, search
    **translates a refusal into the right outcome for the kind of request** — an ordinary
    redirect, an `HX-Redirect`, or a `401` if an API ever exists.
 
+   *Settled 2026-09-08, during implementation: no `401` from the base.* A proper `401`
+   carries `WWW-Authenticate`, and only whoever authenticates knows the scheme (§5). An
+   API client refused by the gate gets the same `303` as a browser; the day an API
+   exists, its auth module answers its own `401`. The redirect is a `303`, not a `302`,
+   so a refused POST is never re-posted to the login page.
+
 3. **The uniform error shape, as data with renderers.** The prototype's exception
    middleware answers `text/plain`, with a comment explaining that the app speaks only
    HTML. In the base this becomes **an error datum with several renderings**: a full

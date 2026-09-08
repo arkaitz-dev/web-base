@@ -91,6 +91,18 @@
     (throw (ex-info "i18n :locale-fn must be a function of the request"
                     {:config-key [:i18n :locale-fn] :value locale-fn}))))
 
+(defn- translator
+  "`:wb/tr` for one request: `(tr :id)`, `(tr :id args)`, or Tempura's own
+  vector of ids with fallbacks, `(tr [:id :other \"literal\"] args)`. A bare id
+  is the common call; Tempura only accepts the vector, and its refusal is an
+  internal invariant error that names nothing the caller wrote. An id the
+  dictionary lacks answers nil."
+  [tr prefs]
+  (let [ids (fn [id] (if (vector? id) id [id]))]
+    (fn
+      ([id]      (tr prefs (ids id)))
+      ([id args] (tr prefs (ids id) args)))))
+
 (defn wrap
   "Middleware adding `:wb/tr` and `:wb/locale` to every request. Tempura's
   locale cache is off: it is a global memo keyed by the preference list, and
@@ -105,5 +117,5 @@
     (fn [request]
       (let [prefs (preferences config request)]
         (handler (assoc request
-                        :wb/tr     (partial tr prefs)
+                        :wb/tr     (translator tr prefs)
                         :wb/locale (resolve-locale index prefs)))))))

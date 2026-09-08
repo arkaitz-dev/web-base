@@ -171,3 +171,19 @@
       (is (= expected (try (accept app-es header) (catch Throwable t [::threw (class t)]))))))
   (is (= EN (accept (app-with {:default-locale :es :locale-fn (constantly ["en"])}) ";"))
       "the host's choice survives a broken header"))
+
+(deftest wb-tr-takes-a-bare-id-or-tempuras-vector--with-or-without-args--and-a-missing-id-is-still-nil
+  ;; D carries no :missing key on purpose: a nil here is the absence of any
+  ;; fallback layer, not a fallback text.
+  (let [capture (fn [{tr :wb/tr}]
+                  {:bare      (tr :only-en)
+                   :bare-args (tr :greet ["Ann"])
+                   :vectors   [(tr [:nope :greet] ["Z"]) (tr [:greet] ["Q"])]
+                   :missing   [(tr :nope) (tr [:nope])]
+                   :control   (tr [:only-en])})
+        seen    ((i18n/wrap capture {:dict D :default-locale :es}) (get* "Accept-Language" "en"))]
+    (is (= "en-only" (:control seen)) "control: today's vector shape still answers")
+    (is (= "en-only" (:bare seen)) "(tr :id) — a bare id is wrapped into Tempura's vector")
+    (is (= "Hello Ann" (:bare-args seen)) "(tr :id args) — with arguments")
+    (is (= ["Hello Z" "Hello Q"] (:vectors seen)) "vector ids are passed through untouched, with args")
+    (is (= [nil nil] (:missing seen)) "a missing id is nil through both shapes: no fallback layer")))

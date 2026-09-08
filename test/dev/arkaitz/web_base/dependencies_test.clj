@@ -66,7 +66,10 @@
   preserved and data readers are disabled so `#ig/ref` stays inspectable data
   instead of resolving through integrant's own data_readers."
   [^File file]
-  (with-open [rdr (LineNumberingPushbackReader. (io/reader file))]
+  ;; `::alias/kw` only reads inside its own namespace; folding `::` to `:`
+  ;; keeps every symbol and keyword name intact, which is all the scan looks at.
+  (with-open [rdr (LineNumberingPushbackReader.
+                   (java.io.StringReader. (str/replace (slurp file) "::" ":")))]
     (binding [*read-eval*               false
               *data-readers*            {}
               *default-data-reader-fn*  tagged-literal]

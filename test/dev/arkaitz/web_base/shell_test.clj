@@ -8,6 +8,7 @@
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.shell :as shell]
+            [dev.arkaitz.web-base.testing :as testing]
             [reitit.ring :as ring]
             [ring.mock.request :as mock])
   (:import [java.security MessageDigest]))
@@ -96,17 +97,19 @@
 (deftest token-embedded-in-hx-headers-is-the-one-wrap-csrf-accepts--round-trip
   (let [app    (app-with-shell)
         first* (app (mock/request :get "/"))
-        token  (second (re-find #"<body hx-headers:inherited=\"\{&quot;X-CSRF-Token&quot;:&quot;([A-Za-z0-9+/=]+)&quot;\}\">" (:body first*)))
-        cookie (second (re-find #"^(ring-session=[^;]*);" (str (first (get-in first* [:headers "Set-Cookie"])))))
-        post   (fn [& headers] (let [r (reduce (fn [q [k v]] (mock/header q k v)) (mock/header (mock/request :post "/") "HX-Request" "true") (partition 2 headers))
-                                     out (app r)] [(:status out) (:body out)]))
+        token  (testing/csrf-token first*)
+        post   (fn [base & headers] (let [r (reduce (fn [q [k v]] (mock/header q k v)) (mock/header base "HX-Request" "true") (partition 2 headers))
+                                          out (app r)] [(:status out) (:body out)]))
+        bare   (mock/request :post "/")
+        jarred (testing/with-cookies bare first*)
         frag   "<div class=\"wb-error\" data-status=\"403\"><strong class=\"wb-error-status\">403</strong></div>"]
+    (is (str/includes? (:body first*) "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;") "the shell put the token on <body>")
     (is (and (string? token) (= 80 (count token))) "the shell embedded the session's token (ring-anti-forgery 1.4.0: 60 random bytes, base64 unpadded)")
-    (is (some? cookie))
-    (is (= [200 "<p>posted</p>"] (post "Cookie" cookie "X-CSRF-Token" token)) "the embedded token is accepted")
-    (is (= [403 frag] (post "Cookie" cookie)) "without the header: refused")
-    (is (= [403 frag] (post "Cookie" cookie "X-CSRF-Token" "nope")) "a wrong token: refused")
-    (is (= [403 frag] (post "X-CSRF-Token" token)) "without the cookie: refused")))
+    (is (seq (testing/cookies first*)) "the page minted the session cookie")
+    (is (= [200 "<p>posted</p>"] (post jarred "X-CSRF-Token" token)) "the embedded token is accepted")
+    (is (= [403 frag] (post jarred)) "without the header: refused")
+    (is (= [403 frag] (post jarred "X-CSRF-Token" "nope")) "a wrong token: refused")
+    (is (= [403 frag] (post bare "X-CSRF-Token" token)) "without the cookie: refused")))
 
 (deftest served-by-wb-handler-at-the-paths-the-shell-emits--with-right-content-types
   (let [app (wb/handler {:routes [] :session {:key KEY}})

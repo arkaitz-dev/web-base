@@ -5,6 +5,7 @@
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.server :as server]
             [dev.arkaitz.web-base.session :as session]
+            [dev.arkaitz.web-base.testing :as testing]
             [ring.adapter.jetty :as jetty])
   (:import [java.net ConnectException URI]
            [java.net.http HttpClient HttpClient$Redirect HttpClient$Version HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
@@ -51,7 +52,8 @@
       (is (= port (.getLocalPort ^ServerConnector (first (.getConnectors ^Server (:server handle)))))
           "the port is the connector's, not the option's — port 0 proves it")
       (let [login  (http port "POST" "/login")
-            cookie (second (re-find #"^(ring-session=[^;]*);" (str (first (get-in login [:headers "set-cookie"])))))]
+            ;; The client's response map is not a Ring request: only the header value is borrowed.
+            cookie (get-in (testing/with-cookies {} login) [:headers "cookie"])]
         (is (= [200 "in"] [(:status login) (:body login)]))
         (is (some? cookie) "a session cookie came over the wire")
         (let [me (http port "GET" "/me" "Cookie" cookie)]

@@ -7,6 +7,7 @@
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.session :as session]
+            [dev.arkaitz.web-base.testing :as testing]
             [ring.mock.request :as mock])
   (:import [clojure.lang ExceptionInfo]))
 
@@ -49,11 +50,6 @@
           :static     {:root "public"}}
          more))
 
-(defn- cookie-of [response]
-  (second (re-find #"^(ring-session=[^;]*);" (str (first (get-in response [:headers "Set-Cookie"]))))))
-
-(defn- with-cookie [request cookie] (mock/header request "Cookie" cookie))
-
 (defn- id-of [response] (get-in response [:headers "X-Request-Id"]))
 
 (defn- error-headers [response]
@@ -71,12 +67,11 @@
         "a collaborator's construction-time check is reached")))
 
 (deftest assembled-login-sets-session-and-gate-admits-the-cookie-refuses-without-it
-  (let [app    (wb/handler (config :csrf false))
-        login  (app (mock/request :post "/login"))
-        cookie (cookie-of login)]
+  (let [app   (wb/handler (config :csrf false))
+        login (app (mock/request :post "/login"))]
     (is (= {:status 200 :body "in"} (dissoc login :headers)))
-    (is (some? cookie) "login issued a session cookie")
-    (let [r (app (with-cookie (mock/request :get "/priv") cookie))]
+    (is (seq (testing/cookies login)) "login issued a session cookie")
+    (let [r (app (testing/with-cookies (mock/request :get "/priv") login))]
       (is (= {:status 200 :body "hi \"ann\""} (dissoc r :headers)) "gated GET with the cookie: the subject came from the session")
       (is (re-matches id-pattern (str (id-of r)))))
     (let [r (app (mock/request :get "/priv"))]
@@ -93,8 +88,7 @@
   (let [app    (wb/handler (config))
         t      (app (mock/request :get "/token"))
         token  (:body t)
-        cookie (cookie-of t)
-        with   #(with-cookie % cookie)]
+        with   #(testing/with-cookies % t)]
     (is (re-matches #"[A-Za-z0-9+/]{80}" (str token)) "ring-anti-forgery 1.4.0's token shape: 60 random bytes, base64 unpadded")
     (let [r (app (mock/request :post "/post"))]
       (is (re-matches id-pattern (str (id-of r))) "the refusal carries a well-formed request id")
@@ -220,3 +214,4 @@
       (is (= [403 true SEC]
              [(:status r) (boolean (re-matches id-pattern (str (id-of r)))) (select-keys (:headers r) (keys SEC))])
           "a CSRF refusal carries the outer stack's id and headers"))))
+

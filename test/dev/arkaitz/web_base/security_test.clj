@@ -11,6 +11,7 @@
             [ring.middleware.anti-forgery :as anti-forgery]
             [ring.middleware.params :as params]
             [ring.middleware.session.memory :as memory]
+            [dev.arkaitz.web-base.testing :as testing]
             [ring.mock.request :as mock])
   (:import [clojure.lang ExceptionInfo]
            [java.util Base64]))
@@ -163,8 +164,10 @@
                                     render-error)
                 {:store (memory/memory-store sessions)}))
 
-(defn- sid-of [response]
-  (second (re-find #"^ring-session=([^;]*);" (str (first (get-in response [:headers "Set-Cookie"]))))))
+(defn- sid-of
+  "The memory store's session id: the cookie's value."
+  [response]
+  (get (testing/cookies response) "ring-session"))
 
 (defn- with-sid [request sid] (mock/header request "Cookie" (str "ring-session=" sid)))
 
@@ -254,11 +257,11 @@
         app   (session/wrap (security/wrap-csrf (fn [r] (reset! seen r) {:status 200 :body "x"}) render-error)
                             {:key "AAECAwQFBgcICQoLDA0ODw=="})
         first* (app req)
-        cookie (second (re-matches #"ring-session=([A-Za-z0-9%]+--[A-Za-z0-9%]+); Path=/; HttpOnly; SameSite=Lax; Secure"
-                                   (str (first (get-in first* [:headers "Set-Cookie"])))))
+        raw    (str (first (get-in first* [:headers "Set-Cookie"])))
         t      (security/csrf-token @seen)
-        post   (mock/header (mock/request :post "/") "Cookie" (str "ring-session=" cookie))]
-    (is (some? cookie) "the cookie store sealed a session")
+        post   (testing/with-cookies (mock/request :post "/") first*)]
+    (is (re-matches #"ring-session=[A-Za-z0-9%]+--[A-Za-z0-9%]+; Path=/; HttpOnly; SameSite=Lax; Secure" raw)
+        (str "the cookie store sealed a session with the default attributes: " raw))
     (is (= {:status 200 :body "x"} (app (mock/header post "X-CSRF-Token" t))) "cookie + token passes, session not re-sealed")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app post)) "cookie without token")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header (mock/request :post "/") "X-CSRF-Token" t))) "token without cookie")))

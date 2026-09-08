@@ -15,6 +15,11 @@
   fragment to a navigation."
   "HX-Request, HX-Request-Type")
 
+(def fragment-headers
+  "The request headers htmx 4 sends for a swap, as Ring delivers them: what
+  a host's test sends to stand in for one. `partial-request?` answers true."
+  {"hx-request" "true" "hx-request-type" "partial"})
+
 (defn partial-request?
   "True when htmx asked for a fragment rather than a whole document. Ring
   lowercases request header names."

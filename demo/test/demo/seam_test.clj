@@ -8,7 +8,9 @@
             [clojure.test :refer [deftest is testing]]
             [demo.system]
             [dev.arkaitz.web-base :as wb]
+            [dev.arkaitz.web-base.testing :as testing]
             [integrant.core :as ig]
+            [ring.middleware.session.memory :as memory]
             [ring.mock.request :as mock]))
 
 (def ^:private KEY "AAECAwQFBgcICQoLDA0ODw==")
@@ -17,12 +19,6 @@
   (wb/handler (ig/init-key :demo/web-config {:store       (ig/init-key :demo/store {:todos [{:id 1 :title "uno" :done? false}]})
                                              :session-key KEY
                                              :secure?     false})))
-
-(defn- cookie-of [response]
-  (second (re-find #"^(ring-session=[^;]*);" (str (first (get-in response [:headers "Set-Cookie"]))))))
-
-(defn- token-in [body]
-  (second (re-find #"name=\"__anti-forgery-token\" type=\"hidden\" value=\"([^\"]+)\"" (str body))))
 
 (defn- get* [app path & headers]
   (app (reduce (fn [r [k v]] (mock/header r k v)) (mock/request :get path) (partition 2 headers))))
@@ -34,7 +30,7 @@
     (is (str/starts-with? (:body home) "<!DOCTYPE html>\n<html lang=\"es\">") "the shell, in the default language")
     (is (str/includes? (:body home) "<div id=\"app\"><nav class=\"tabs\">") "the tabs section inside it")
     (is (str/includes? (:body home) "hx-headers:inherited=") "the CSRF token for htmx")
-    (is (some? (cookie-of home)) "the first visit mints the session that holds the CSRF token")
+    (is (seq (testing/cookies home)) "the first visit mints the session that holds the CSRF token")
     (is (str/includes? (:body home) "hx-swap=\"outerHTML\" hx-target=\"#app\"")
         "the tab buttons replace #app whole: the section answers with the wrapper itself")
     (let [swap (get* app "/tabs/search" "HX-Request" "true")]
@@ -49,21 +45,21 @@
     (let [r (get* app "/private" "HX-Request" "true")]
       (is (= [200 "/login" nil] [(:status r) (get-in r [:headers "HX-Redirect"]) (get-in r [:headers "Location"])])
           "an htmx request gets HX-Redirect and never a Location"))
-    (let [form   (get* app "/login")
-          token  (token-in (:body form))
-          cookie (cookie-of form)
-          login  (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
-                          (mock/header "Cookie" cookie)))
-          rotated (cookie-of login)]
+    (let [form    (get* app "/login")
+          token   (testing/csrf-token form)
+          login   (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
+                           (testing/with-cookies form)))
+          before  (testing/cookies form)
+          rotated (testing/cookies login)]
       (is (some? token) "the login form carries the csrf field")
       (is (= [303 "/private"] [(:status login) (get-in login [:headers "Location"])]) "login redirects to the private page")
-      (is (and (some? rotated) (not= rotated cookie)) "the session id was rotated on login")
-      (let [private (get* app "/private" "Cookie" rotated)]
+      (is (and (seq rotated) (not= rotated before)) "the session id was rotated on login")
+      (let [private (app (testing/with-cookies (mock/request :get "/private") login))]
         (is (= 200 (:status private)))
         (is (str/includes? (:body private) "Eres ada") "the private page names the subject")))
     (let [form   (get* app "/login")
-          login  (app (-> (mock/request :post "/login" {"name" "x" "__anti-forgery-token" (token-in (:body form))})
-                          (mock/header "Cookie" (cookie-of form))))]
+          login  (app (-> (mock/request :post "/login" {"name" "x" "__anti-forgery-token" (testing/csrf-token form)})
+                          (testing/with-cookies form)))]
       (is (= 200 (:status login)) "a rejected name re-renders the form")
       (is (str/includes? (:body login) "dinos quién eres") "with malli's message in the page's language"))))
 
@@ -88,27 +84,27 @@
     (is (str/starts-with? (:body (get* app "/" "Accept-Language" "en")) "<!DOCTYPE html>\n<html lang=\"en\">") "Accept-Language")
     (is (str/includes? (:body (get* app "/" "Accept-Language" "en")) ">Tasks<") "translated tabs")
     (let [form   (get* app "/")
-          token  (second (re-find #"hx-headers:inherited=\"\{&quot;X-CSRF-Token&quot;:&quot;([^&]+)&quot;\}\"" (:body form)))
-          cookie (or (cookie-of form)
-                     (cookie-of (get* app "/login")))
-          _      (is (some? token))
+          token  (testing/csrf-token form)
+          _      (is (some? token) "the home page carries the token in the shell's <body>")
+          _      (is (seq (testing/cookies form)) "and minted the session")
           switch (app (-> (mock/request :post "/lang" {"locale" "en" "__anti-forgery-token" token})
-                          (mock/header "Cookie" cookie)))
-          after  (get* app "/" "Cookie" (or (cookie-of switch) cookie) "Accept-Language" "es")]
+                          (testing/with-cookies form)))
+          ;; The switch rewrote the session: its cookie, or the page's if it set none.
+          after  (app (-> (mock/request :get "/") (mock/header "Accept-Language" "es")
+                          (testing/with-cookies form) (testing/with-cookies switch)))]
       (is (= 303 (:status switch)))
       (is (str/starts-with? (:body after) "<!DOCTYPE html>\n<html lang=\"en\">") "the session's choice beats the header"))))
 
 (deftest todos-round-trip-through-htmx-with-the-csrf-header
   (let [app    (app)
         form   (get* app "/login")
-        token  (token-in (:body form))
-        cookie (cookie-of form)
+        token  (testing/csrf-token form)
         add    (app (-> (mock/request :post "/todos" {"title" "dos"})
-                        (mock/header "Cookie" cookie) (mock/header "HX-Request" "true") (mock/header "X-CSRF-Token" token)))]
+                        (testing/with-cookies form) testing/fragment (mock/header "X-CSRF-Token" token)))]
     (is (= 200 (:status add)))
     (is (str/starts-with? (:body add) "<div id=\"todos\">") "the fragment htmx swaps in")
     (is (and (str/includes? (:body add) "uno") (str/includes? (:body add) "dos")))
-    (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (mock/header "Cookie" cookie) (mock/header "HX-Request" "true")))))
+    (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (testing/with-cookies form) testing/fragment))))
         "without the token: the base's 403")))
 
 (deftest boom-is-the-page-on-a-history-restore-and-the-500-fragment-on-a-swap
@@ -126,3 +122,4 @@
     (is (= [500 "<div class=\"wb-error\" data-status=\"500\"><strong class=\"wb-error-status\">500</strong></div>"]
            [(:status swap) (:body swap)])
         "a swap of /boom: exactly the base's 500 fragment")))
+

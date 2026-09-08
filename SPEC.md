@@ -4,17 +4,17 @@
 > · artifact `dev.arkaitz/web-base`.
 >
 > **Status.** Specification, briefly. This is a small piece and does not warrant the
-> treatment the first consumer's domain received; it moves to implementation soon.
+> treatment a domain receives; it moved to implementation the same day.
 >
-> **Provenance.** Extracted from the decision log of
-> `the first consumer's own specification` (entries of 2026-09-07 and 2026-09-08 on modularity and on the
-> web base). the first consumer is the first consumer, **not the owner**.
+> **Provenance.** Extracted from the modularity decisions (2026-09-07 and 2026-09-08)
+> of a separate, domain-specific application, which is the first consumer, **not the
+> owner**.
 
 ## 1 · What it is
 
 A **super-micro-framework**: the operational web foundation a project plugs in so it
-does not have to reassemble the same plumbing every time. the first consumer consumes it exactly
-as it consumes any other module, and another project should be able to reuse it
+does not have to reassemble the same plumbing every time. The first consumer uses it
+exactly as it uses any other module, and another project should be able to reuse it
 **as-is**.
 
 Most of what it needs already exists in the Clojure ecosystem as **libraries**. What
@@ -26,8 +26,8 @@ than "framework" suggests, which is what allows it to be micro.
 - **Not a framework that calls you.** See §3.
 - **Not an application.** It has no screens of its own beyond the shell and its own
   harness.
-- **It knows no domain.** Not the first consumer's, not anyone's. No customer, no customer, no
-  invoice, no booking.
+- **It knows no domain.** Not its first consumer's, not anyone's. No customer, no
+  invoice, no booking, no appointment.
 - **It does not authenticate.** See §5.
 - **It does not choose your persistence.** It never opens a database.
 
@@ -110,8 +110,8 @@ storage, and every domain concept of every consumer.
 ## 7 · Build it thin
 
 Built before there are two consumers, it will be built to fit the first — and a base
-that only fits the first consumer is not a base, it is a part of the first consumer that we have to maintain
-separately, which is worse than not extracting it.
+that only fits its first consumer is not a base, it is a part of that consumer that we
+have to maintain separately, which is worse than not extracting it.
 
 **So: start minimal, and let the *second* project be what pulls things in.** When in
 doubt, leave it in the consumer. Moving code *into* a library later is cheap; getting
@@ -149,12 +149,12 @@ nearly our own problem solved by someone else.
 
 **Why htmx nonetheless:**
 
-- **Our need for real-time is close to nil.** The only candidate is a meeting in progress
-  with attendance and votes updating live — and it is already established that the
-  ordinary case is a show of hands with the result assigned directly, not a live count.
-  Billing, contabilidad, archivos and notifications need no push at all. SSE would be
-  paid for in long-lived connections, threads, proxies, timeouts and horizontal scaling,
-  against almost no benefit here.
+- **Our need for real-time is close to nil.** The only candidate in the first consumer
+  is a meeting in progress with attendance and votes updating live — and it is already
+  established that its ordinary case is a show of hands with the result entered
+  directly, not a live count. Billing, accounting, files and notifications need no push
+  at all. SSE would be paid for in long-lived connections, threads, proxies, timeouts
+  and horizontal scaling, against almost no benefit here.
 - **The plan is an extraction, not a rewrite.** `../prueba` works, with htmx. Datastar
   would turn the extraction into a rewrite of the whole view layer, and **all three of
   the base's htmx-specific behaviours would change** — `HX-Request` for fragment vs
@@ -169,9 +169,9 @@ not a one-way door, provided `HX-` strings are not scattered through the codebas
 **named and isolated**. We are not building a layer to support both; we are simply not
 spreading the dependency around.
 
-**A note on method:** Hyperlith deserves reading, but **afterwards** — as with
-an earlier project. Our own implementation first, then it as a second opinion. Read before, we
-would adopt its decisions without having understood our own.
+**A note on method:** Hyperlith deserves reading, but **afterwards**. Our own
+implementation first, then it as a second opinion. Read before, we would adopt its
+decisions without having understood our own.
 
 ### The stack, taken from `../prueba`
 
@@ -326,12 +326,11 @@ No database is opened, nothing is imposed, and both mechanisms remain available.
 **A cookie session cannot be killed from the server.** The cookie stays valid until it
 expires, whatever you do. That meets what was established about magic links: the link
 attests **control of a mailbox**, and that leap is the weakest link in the whole chain.
-The day an user with reach over sixty accounts has their mailbox
-compromised, *"end their session now"* must have an answer. With a cookie store it has
-none.
+The day a user with reach over dozens of accounts has their mailbox compromised, *"end
+their session now"* must have an answer. With a cookie store it has none.
 
-So **the first consumer will most likely want a server-side store**, even though the base defaults to
-a cookie. That is the intended division: the base carries what makes the demo run, the
+So **a consumer with that exposure will want a server-side store**, even though the
+base defaults to a cookie. That is the intended division: the base carries what makes the demo run, the
 consumer supplies what its own risk demands.
 
 ### Two traps, written down before they exist
@@ -442,7 +441,7 @@ A restatement of the membership test that fits this project better: **it is not 
 strangers, it is for the author in two years.** §7 already says the second consumer is
 what should pull things inward — and the second consumer will almost certainly be his
 own next project. The base is not being protected from third parties: it is being
-protected from a future idea having to argue with assumptions the first consumer made.
+protected from a future idea having to argue with assumptions its first consumer made.
 
 *(Theming was settled in §10: structural CSS plus custom properties.)*
 

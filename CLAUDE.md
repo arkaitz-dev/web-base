@@ -10,12 +10,10 @@ the few rules that get broken silently.
 `dev.arkaitz/web-base` — a **super-micro-framework**: the operational web foundation a
 project plugs in. Server-rendered HTML with **HTMX** and **Hiccup**.
 
-It was extracted from the modularity decisions of a separate project, **the first consumer**
-(`the first consumer`), a management system for Spanish a specific domain. **the first consumer is
-the first consumer, not the owner.** The reasoning behind every boundary here lives in
-`the first consumer's own specification` §3 (decision log, entries of 2026-09-07 and 2026-09-08) and is drawn
-in `the first consumer's own map` §5. Read those before questioning a boundary; do not re-derive
-them.
+It was extracted from the modularity decisions of a separate, domain-specific
+application that is **its first consumer, not its owner**. The reasoning behind every
+boundary is recorded in `SPEC.md`; read it before questioning a boundary, and do not
+re-derive it.
 
 ## Project state
 

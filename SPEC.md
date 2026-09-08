@@ -427,5 +427,68 @@ what should pull things inward — and the second consumer will almost certainly
 own next project. The base is not being protected from third parties: it is being
 protected from a future idea having to argue with assumptions the first consumer made.
 
-*(Theming was settled in §10: structural CSS plus custom properties. Nothing remains
-open in this document; what is left is implementation.)*
+*(Theming was settled in §10: structural CSS plus custom properties.)*
+
+## 14 · Internationalisation — settled 2026-09-08, during implementation
+
+Raised by the author after the plan was approved: the base must **allow**
+internationalisation and, by the author's decision, **include** it.
+
+**What already allowed it, unsaid.** No base namespace emits visible prose: error data
+carry a status and optional strings the host supplies, the default error page shows the
+status alone, and the shell exposes a `:lang` slot. A base that knows no domain knows no
+language either, and that had to be true before anything here could be built on it.
+
+**What was missing is what a bicycle rental needs unchanged:** knowing, per request,
+which language to render. That is request context, exactly like the request id, and it
+belongs to the base: the host's handlers, layouts and error pages must all agree on it,
+and an htmx fragment must render in the same language as the page it lands in.
+
+### Options considered
+
+1. **Negotiation only**, translations left to the host with whatever library it likes.
+2. **Negotiation plus a minimal catalogue of our own** — EDN dictionaries, fallback,
+   simple interpolation. Forty lines duplicating what the ecosystem does better.
+3. **Negotiation plus [Tempura](https://github.com/taoensso/tempura) integrated.**
+
+The ecosystem, checked 2026-09-08: Tempura (Taoussanis; EDN dictionaries, fallback,
+Hiccup content, the choice of Luminus and Kit; 1.5.4, June 2024) and
+[Tongue](https://github.com/tonsky/tongue) (Prokopov; zero dependencies, functions for
+plurals, number and date formatters; 0.4.4, March 2022) are the two live choices;
+Tower is superseded by Tempura; clj-i18n is a gettext workflow for translator teams.
+Both live choices use **plain maps as dictionaries**.
+
+**The author chose 3.** Recorded against §10 honestly: Tempura is a **deep** dependency
+by §10's own test — the consumer writes its dictionaries in Tempura's shape and calls
+its `tr` — and every consumer inherits encore, truss and tools.reader. The cost formula
+is `depth × probability of disagreement`, and the judgement is that disagreement is
+low: the dictionary is an EDN map, which is also what Tongue would want, and Tempura is
+the ecosystem's default. What is bought is that the demo, and every consumer, gets
+translation working from the first request with nothing to assemble. The assistant
+recommended option 1; the author's call stands, and this paragraph is its paper trail.
+
+### The seam
+
+- The host configures `:i18n {:dict … :default-locale … :locale-fn …}`. `:dict` is a
+  Tempura dictionary; its top-level keys are the **supported locales**.
+- Per request the base computes the preference list — `(:locale-fn request)` when the
+  host supplies one (a preference kept in the session, a cookie, a URL prefix), else the
+  parsed `Accept-Language` — followed by the default locale.
+- It puts on the request `:wb/tr`, Tempura's translate function bound to that list, and
+  `:wb/locale`, the **first supported** locale in the list, resolved the way Tempura
+  resolves it (`en-GB` matches a dictionary with `:en`). `:wb/locale` therefore never
+  names a language the page is not actually rendered in, and `<html lang>` — which the
+  shell fills from it when the host gives no `:lang` — never lies.
+- Missing `:i18n` is allowed: single-language hosts get no `:wb/tr` and no `lang`
+  unless they set the slot themselves.
+
+**Out, deliberately:** number and date formatting (`java.text` in the host, or Tongue's
+formatters), pluralisation rules, translated URLs, locale prefixes in paths. The host
+can build all of them on `:wb/locale`; the base does not guess which it wants.
+
+**The trap, written down:** never cache a rendered page per language across requests
+without keying on `:wb/locale`, and never read the language from anywhere but the
+request — the htmx fragment that arrives a second later carries the same headers and
+must land in the same language.
+
+*(Nothing remains open in this document; what is left is implementation.)*

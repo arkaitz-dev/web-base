@@ -202,7 +202,8 @@ And §8 comes free: strip the base out and what remains — store, todos, search
 ### What web-base must own that the prototype does not yet
 
 1. **Fragment or full page, decided from the `HX-Request` header — not by the
-   handler.** Left to the handler it produces duplicate routes: one for direct
+   handler.** *(Refined in §12: with nested layouts the question is not binary but
+   "from what height of the layout stack".)* Left to the handler it produces duplicate routes: one for direct
    navigation, another for the htmx swap. Decided by the base, one handler serves both:
    it returns Hiccup, and the base wraps it in the shell **only when the request did not
    come from htmx**. That is what a page shell is for.
@@ -340,7 +341,56 @@ when someone has just authenticated**. So the base must **expose "rotate this se
 in its API and document that the consumer is required to call it. Unsaid, it does not get
 done — and it produces no symptom at all.
 
-## 12 · The subject, and the shell as a set of slots
+## 12 · Layouts: nesting is composition, not inheritance
+
+**Different layouts for different pages, and nested layouts: yes — and more easily than
+in any template framework**, for a reason worth stating.
+
+**Template inheritance exists because templates are strings.** `{% extends %}`, blocks,
+`yield` — all of it is machinery for composing text, which does not compose by itself.
+Here the markup **is data** and a layout **is a function**:
+
+```clojure
+(defn app     [content] [:html ... content])
+(defn section [content] [:main.panel content])
+
+(app (section page))
+```
+
+**Nesting layouts is calling one function inside another.** There is nothing to invent.
+
+With one refinement already reached by another route: a layout usually has not *one*
+hole but several — title, breadcrumbs, content, aside. So it takes **a map of slots**
+rather than a single argument, which is exactly §13's conclusion that the shell is a set
+of slots rather than a layout with fields.
+
+### The real difficulty is not nesting — it is htmx
+
+§9 says the base decides **fragment or full page** from `HX-Request`. With nested layouts
+that is too coarse, because **"fragment" stops being binary**: an htmx swap may target
+the whole main area — wanting the section layout but not the outer shell — or a small
+widget, wanting none at all.
+
+So the question is not *"page or fragment?"* but **"from what height of the stack do I
+render?"**
+
+**And the answer is already in the house: the route knows its own stack.** Reitit lets
+arbitrary data hang off a route, so a route declares its layouts and the response says
+how many layers to apply. No global registry, no magic convention — route data, which is
+already in use.
+
+**A default that covers the ordinary case:** `HX-Request` present → render **only the
+innermost layer**; absent → **the whole stack**. The handler names the intermediate cases
+on the rare occasions they arise. Nothing more.
+
+### The one way to spoil this
+
+**Do not build a layout engine.** The temptation will be a `deflayout` macro, a registry,
+an inheritance mechanism. All of it unnecessary: functions and route data suffice. **If we
+find ourselves writing a macro for this, we have gone wrong** — because the whole argument
+for Hiccup is that the language already solved composition.
+
+## 13 · The subject, and the shell as a set of slots
 
 **Settled: the subject belongs to the auth module, and the base needs to know nothing
 about it — not even as an opaque value it inspects.**

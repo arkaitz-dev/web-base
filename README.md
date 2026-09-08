@@ -63,7 +63,8 @@ schema yourself.
 - **Test helpers** for the host's own suite: the cookies a response set, the
   CSRF token a page carries, a request shaped like an htmx swap.
 - **Lifecycle** as plain `start`/`stop` functions; an optional Integrant
-  namespace for hosts that use it.
+  namespace for hosts that use it, and an optional one that lets the whole
+  thing compile to a native binary.
 
 What it does not do: authenticate, authorise, persist, or know your domain.
 
@@ -297,6 +298,65 @@ alive yourself, and stop the server on the way out:
 `stop` takes the handle `start` returned, not the Jetty object inside it. Passing
 the var `#'app` rather than `app` lets a REPL redefine the handler without
 restarting Jetty.
+
+### A native binary
+
+A web-base application compiles to a GraalVM native image. Measured on one
+machine, the same application both ways:
+
+| | startup | resident |
+|---|---|---|
+| native binary | 41 ms | 25 MB |
+| JVM | 625 ms | 220 MB |
+
+Require `dev.arkaitz.web-base.native` from your main namespace — like the
+Integrant one, requiring it is the opt-in — put
+`com.github.clj-easy/graal-build-time` on the classpath, AOT-compile your main
+namespace, and then:
+
+```
+native-image -cp $(clojure -Spath) \
+  --features=clj_easy.graal_build_time.InitClojureClasses \
+  --initialize-at-build-time=org.slf4j \
+  -H:+UnlockExperimentalVMOptions \
+  -H:IncludeResourceBundles=jakarta.servlet.LocalStrings \
+  -H:IncludeResources='dev/arkaitz/web_base/public/[^/]+\.[a-z]+$' \
+  -H:IncludeResources='public/.*[^/]\.[a-z]+$' \
+  -o target/app my.app
+```
+
+Why each one, because a flag nobody can explain is a flag nobody can remove:
+
+- `graal-build-time` registers Clojure's namespaces for build-time
+  initialisation, which every Clojure image needs.
+- slf4j's logger factory reaches the image heap through `tools.logging`.
+- Jetty's servlet layer reads `jakarta.servlet.LocalStrings` when it writes a
+  response; without the bundle every request answers `500`.
+- Without the resources the base's own CSS and htmx are not in the binary. The
+  second pattern is your own `:static` root.
+
+**Match files, not directories**, as those patterns do. A directory registered
+as a resource is served as a listing of its names: measured, `GET /css` on a
+host root containing `css/site.css` answered `200` with `site.css` where the
+jar answers `404`. The library refuses the spellings it can recognise — `/wb/`
+and `/css/` — and an include pattern that ends in an extension closes the rest.
+
+These are GraalVM's flags, not the library's, and they move between releases;
+this set was observed working with GraalVM CE 25. Anything else your
+application brings — a database driver, a JSON library — is yours to
+configure, and you do not have to guess: run it once on a JVM under the
+tracing agent and it writes the configuration by watching.
+
+```
+java -agentlib:native-image-agent=config-output-dir=native-config -cp $(clojure -Spath) my.app
+```
+
+Exercise the application, stop it, and pass that directory to `native-image`
+with `-H:ConfigurationFileDirectories=native-config`.
+
+On macOS a Homebrew GraalVM is deliberately not linked, so the `java` on your
+PATH stays the one you had. Use it one command at a time with
+`JAVA_HOME=/opt/homebrew/opt/graalvm`, or call `native-image` by its full path.
 
 ### Integrant
 

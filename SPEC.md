@@ -117,6 +117,20 @@ have to maintain separately, which is worse than not extracting it.
 doubt, leave it in the consumer. Moving code *into* a library later is cheap; getting
 it back *out* is not.
 
+*The one deliberate exception, 2026-09-09:* `dev.arkaitz.web-base.native`, an
+optional namespace teaching Ring to read a classpath resource inside a GraalVM
+native image. It is a pull from the first consumer, which §7 says to resist, and
+the gap is Ring's rather than the base's. It is here anyway because the assets
+that answer `500` without it are the ones **the base itself** serves, so the
+failure is the base's whatever its cause; because it is inert on a JVM and adds
+no dependency; and because the alternative is every consumer writing the same
+fifteen lines. Its exit condition is written into a test: the day ring-core
+defines `:resource` itself, this namespace stops being an addition and becomes a
+silent override, and the test says so and asks for it to be deleted. Also
+settled the same day: no random generator may sit in a var root anywhere in the
+base, because native-image bakes it into the binary with its seed — a delay
+holds it instead, and a scan enforces it.
+
 *Considered and held on 2026-09-08, after a DX review, so nobody re-derives them:*
 flash messages in the base (an htmx fragment arriving between the 303 and the
 navigation eats the flash; the page-only form is a design decision, so a host

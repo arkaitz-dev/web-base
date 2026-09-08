@@ -104,6 +104,11 @@ has to be opened deliberately. **Every one of these fails silently.**
 - **Never generate the session signing key at startup.** Works beautifully in
   development; destroys every session on every deploy, and differs per instance. Fail
   loudly when it is missing (SPEC §11).
+- **Never put a random generator in a var root.** `(def r (SecureRandom.))`
+  works perfectly on a JVM and has no symptom there, and GraalVM's
+  `native-image` bakes it into the binary with its seed. A `delay` holds it
+  instead. `native_test.clj` walks every var root of the base for one, through
+  closures, collections and atoms, because no behavioural test can see it.
 - **Never look for a configuration file the host did not name.** A base that knows a
   file name can look for it, and then the directory a process was started from decides
   the signing key. `config/env-file-readers` reads the path it is given and nothing

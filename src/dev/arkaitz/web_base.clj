@@ -32,6 +32,7 @@
             [dev.arkaitz.web-base.session :as session]
             [reitit.ring :as ring]
             [reitit.ring.coercion :as coercion]
+            [ring.middleware.not-modified :as not-modified]
             [ring.middleware.params :as params]))
 
 (def subject-present?
@@ -47,11 +48,16 @@
 
 (defn- with-assets
   "Assets first — the base's `/wb/` before the host's, so a host file cannot
-  shadow the base's own — then `app` for everything else."
+  shadow the base's own — then `app` for everything else. Only the assets
+  answer conditional GETs with a 304: the resource handlers emit
+  `Last-Modified` and nothing else honoured it, so every page load re-sent
+  htmx whole."
   [static app]
   (apply ring/routes
-         (remove nil? [base-assets
-                       (when static (ring/create-resource-handler (merge {:path "/"} static)))
+         (remove nil? [(not-modified/wrap-not-modified base-assets)
+                       (when static
+                         (not-modified/wrap-not-modified
+                          (ring/create-resource-handler (merge {:path "/"} static))))
                        app])))
 
 (defn handler

@@ -215,3 +215,25 @@
              [(:status r) (boolean (re-matches id-pattern (str (id-of r)))) (select-keys (:headers r) (keys SEC))])
           "a CSRF refusal carries the outer stack's id and headers"))))
 
+(deftest conditional-get-is-answered-with-304-by-both-asset-handlers-only--never-by-the-app
+  (let [STAMP "Wed, 01 Jan 2020 00:00:00 GMT"
+        app   (wb/handler (config :csrf false
+                                  :routes (conj routes ["/stamped" {:get (fn [_] {:status 200 :headers {"Last-Modified" STAMP} :body [:p "x"]})}])))
+        lm-re #"[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT"]
+    (doseq [[path type] [["/wb/wb.css" "text/css"] ["/host.txt" "text/plain"]]]
+      (let [first* (app (mock/request :get path))
+            lm     (get-in first* [:headers "Last-Modified"])
+            again  (app (mock/header (mock/request :get path) "If-Modified-Since" lm))
+            older  (app (mock/header (mock/request :get path) "If-Modified-Since" STAMP))]
+        (is (and (= 200 (:status first*)) (some? (:body first*)) (some? (get-in first* [:headers "Content-Length"])) (re-matches lm-re (str lm)))
+            (str "GET " path " answers 200 with a body, Content-Length and Last-Modified: " (pr-str (:headers first*))))
+        (is (= [304 nil type nil] [(:status again) (:body again) (get-in again [:headers "Content-Type"]) (get-in again [:headers "Content-Length"])])
+            (str path " with the same If-Modified-Since: 304, no body, no Content-Length"))
+        (is (= SEC (select-keys (:headers again) (keys SEC))) "the outer security headers survive the 304")
+        (is (and (= 200 (:status older)) (some? (:body older)))
+            (str path " with an earlier If-Modified-Since: 200 — the date is compared, not the header's presence"))))
+    (let [r     (app (mock/header (mock/request :get "/stamped") "If-Modified-Since" STAMP))
+          plain (app (mock/request :get "/stamped"))]
+      (is (= [200 "<!DOCTYPE html>\n<p>x</p>" STAMP] [(:status r) (:body r) (get-in r [:headers "Last-Modified"])])
+          "a routed response with Last-Modified is never 304'd: the app sits outside wrap-not-modified")
+      (is (= (dissoc r :headers) (dissoc plain :headers)) "the same response as without the conditional header"))))

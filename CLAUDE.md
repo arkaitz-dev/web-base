@@ -31,7 +31,7 @@ clojure -M:test                       # whole suite incl. demo/test; exit ≠ 0 
 clojure -M:test -n <namespace>        # one namespace (several -n allowed)
 clojure -T:build jar                  # library jar → target/web-base-0.2.0.jar (no demo inside)
 clojure -T:build install              # jar + pom into ~/.m2; consumed by :mvn/version (verified from another project)
-clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD (not run yet: needs credentials)
+clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD; run for 0.1.0 and 0.2.0
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
 clojure -M:demo [port]                # the same, with the key in ./env.local.edn (git-ignored)
 clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.2.0.jar (18 MB, never published)
@@ -41,6 +41,14 @@ clojure -M:dev                        # REPL with dev/user.clj: (go) (reset) (ha
 
 ⚠ `jar`, `install` and `deploy` delete `target/` before building, so they also
 delete the demo uberjar. Build `demo-uber` last, or rebuild it afterwards.
+
+`deploy` refuses before it touches the network unless the tree is clean, `HEAD` is what
+the remote has, and `vX.Y.Z` exists neither here nor on the remote; then it publishes
+and **tags**, in that order. The guards are `build/release.clj`, tested against real
+throwaway repositories in `test/dev/arkaitz/web_base/release_test.clj`. So a release is:
+bump `version` in `build.clj` → commit → push → `deploy`. Anything missing is refused by
+name. Tags `v0.1.0` and `v0.2.0` were reconstructed by hand on 2026-09-09 from each
+jar's `Last-Modified` on `repo.clojars.org`; that is the archaeology this prevents.
 
 A key: `(dev.arkaitz.web-base.session/generate-key)` in any REPL, once, kept in the
 environment. The base refuses to invent one (SPEC §11).
@@ -104,6 +112,11 @@ has to be opened deliberately. **Every one of these fails silently.**
 - **Never generate the session signing key at startup.** Works beautifully in
   development; destroys every session on every deploy, and differs per instance. Fail
   loudly when it is missing (SPEC §11).
+- **`b/git-process` fails open.** It returns `nil` for a command that failed **and**
+  for one that succeeded with no output, so `(b/git-process {:git-args "status
+  --porcelain"})` cannot tell a clean tree from a git that never ran. Anything in
+  `build/` that shells out uses `b/process` and reads `:exit`. A guard built on the
+  other one publishes in exactly the case it exists to stop.
 - **Never put a random generator in a var root.** `(def r (SecureRandom.))`
   works perfectly on a JVM and has no symptom there, and GraalVM's
   `native-image` bakes it into the binary with its seed. A `delay` holds it

@@ -239,19 +239,26 @@
     (is (= [[:get "/r0"] [:get "/r1"] [:get "/r2"] [:get "/r3"]] (mapv #(subvec % 0 2) @log))
         (str "a 301 to an absolute URL, a 303, and a 302 whose header is spelt in lower case —"
              " each followed as a GET of its path"))
-    (is (= "qs:x=1" (:body (:response b))) "the query string of a Location arrives"))
+    (is (= "qs:x=1" (:body (:response b))) "the query string of a Location arrives")
+    (is (= "/r3?x=1" (:path b)) "and :path is where the chain landed, query string included"))
   (let [{:keys [app log]} (browser-app)
         b (testing/visit (testing/browser app) :get "/to-root")]
     (is (= [[:get "/to-root"] [:get "/"]] (mapv #(subvec % 0 2) @log)) "an origin with no path is its root")
-    (is (= "root" (:body (:response b)))))
+    (is (= "root" (:body (:response b))))
+    (is (= "/" (:path b)) "an absolute Location is recorded as its path"))
   (let [{:keys [app log]} (browser-app)
         b (-> (testing/browser app) (testing/visit :get "/form") (testing/visit :post "/login"))]
     (is (= [[:post "/login"] [:get "/me"]] (mapv #(subvec % 0 2) (take-last 2 @log))) "the 303 of a POST becomes a GET")
-    (is (re-find #":user \"ann\"" (:body (:response b))) "carrying the cookie the 303 set"))
+    (is (re-find #":user \"ann\"" (:body (:response b))) "carrying the cookie the 303 set")
+    (is (= "/me" (:path b)) "and :path is the page the POST's 303 led to"))
   (let [{:keys [app log]} (browser-app)
         b (testing/visit (testing/browser app) :get "/hx-go")]
     (is (= 1 (count @log)) "an HX-Redirect is not followed")
-    (is (= "/me" (get-in (:response b) [:headers "HX-Redirect"])) "and is left for the test to read"))
+    (is (= "/me" (get-in (:response b) [:headers "HX-Redirect"])) "and is left for the test to read")
+    (is (= "/hx-go" (:path b)) "so :path stays the page that answered"))
+  (let [{:keys [app]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/set-a?v=7")]
+    (is (= "/set-a?v=7" (:path b)) "with no redirect, :path is the request, query string included"))
   (let [{:keys [app log]} (browser-app)
         e (try (testing/visit (testing/browser app) :get "/loop") nil (catch clojure.lang.ExceptionInfo e e))]
     (is (re-find #"more than 10 redirects" (str (ex-message e))) "a redirect loop throws")

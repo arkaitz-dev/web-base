@@ -102,7 +102,7 @@
   the session cookie at the first page that sets none, so every request after the
   login looks signed out. This one accumulates."
   [handler]
-  {:handler handler :jar {} :token nil :response nil})
+  {:handler handler :jar {} :token nil :response nil :path nil})
 
 (defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
 
@@ -154,7 +154,8 @@
 
 (defn visit
   "The browser after sending `method` (`:get` or `:post`) to `path` with form `params`,
-  holding the final `:response`.
+  holding the final `:response` and, as `:path`, where it landed — the address bar, with
+  its query string, after every redirect was followed.
 
   - A POST carries the CSRF token of the last page that had one, as the hidden field a
     form would send — or, with `{:htmx? true}`, as the header the shell makes htmx send,
@@ -180,6 +181,7 @@
      (let [response ((:handler b) (request-of b method path params opts))
            b        (assoc b
                            :response response
+                           :path (let [[uri qs] (split-path path)] (cond-> uri qs (str "?" qs)))
                            :jar (into {} (remove (comp nil? val)) (merge (:jar b) (cookies response)))
                            :token (or (csrf-token response) (:token b)))]
        (if (and (redirect? (:status response)) (location response))

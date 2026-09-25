@@ -280,6 +280,22 @@ response set, with a deletion — `Max-Age` zero or less — as `nil`. `with-coo
 keeps the request's own jar, so chaining it across a flow does what a browser
 does.
 
+For a whole flow, `testing/browser` is that chain as a value:
+
+```clojure
+(let [b (-> (testing/browser app)
+            (testing/visit :get "/login")                     ; a page with a CSRF token
+            (testing/visit :post "/login" {"name" "ada"}))]   ; the token rides along
+  (:path b)                                                   ; "/me" — where the 303 landed
+  (:response b))                                              ; the page it landed on
+```
+
+`visit` answers a new browser: the jar accumulated (a deletion forgets), the token of
+the last page that had one, 301/302/303 followed as a GET up to ten times, and `:path`
+— the last request's path and query string, which is the address bar. A POST with no
+token known throws instead of sending; `{:htmx? true}` sends the token as the header
+with the headers of a swap, and leaves an `HX-Redirect` for the test to read.
+
 ### htmx
 
 The base's htmx coupling lives in three named places: the request classifier

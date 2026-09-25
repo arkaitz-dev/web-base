@@ -89,3 +89,102 @@
   even a request already marked as a whole-document one."
   [request]
   (update request :headers merge htmx/fragment-headers))
+
+;; --- a browser ----------------------------------------------------------------
+
+(defn browser
+  "A browser over `handler`, as a value: an empty cookie jar, no CSRF token yet, no
+  page. `visit` answers the browser after a request; nothing is mutated, so a test can
+  keep two tabs of one person by holding two values.
+
+  Why the base ships it: every host's suite wrote the same one, and the first lost an
+  afternoon to the one trap it has — a jar chained from the last response alone drops
+  the session cookie at the first page that sets none, so every request after the
+  login looks signed out. This one accumulates."
+  [handler]
+  {:handler handler :jar {} :token nil :response nil})
+
+(defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
+
+(defn- form-body [params]
+  (str/join "&" (map (fn [[k v]] (str (url-encode (name k)) "=" (url-encode v))) params)))
+
+(defn- split-path
+  "`[uri query-string]` of a path, or of the path part of an absolute URL."
+  [path]
+  (let [path (str/replace-first (str path) #"^https?://[^/]+" "")
+        [uri qs] (str/split path #"\?" 2)]
+    [(if (str/blank? uri) "/" uri) qs]))
+
+(defn- request-of
+  [{:keys [jar token]} method path params {:keys [htmx? remote-addr]}]
+  (let [[uri qs] (split-path path)
+        cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
+        post?    (= :post method)
+        body     (when post?
+                   (form-body (cond-> (vec params)
+                                (not htmx?) (conj ["__anti-forgery-token" token]))))
+        bytes    (some-> ^String body (.getBytes "UTF-8"))]
+    (cond-> {:request-method method
+             :uri            uri
+             :scheme         :http
+             :server-name    "localhost"
+             :server-port    80
+             :remote-addr    (or remote-addr "127.0.0.1")
+             :protocol       "HTTP/1.1"
+             :headers        (cond-> {"host" "localhost"}
+                               cookie (assoc "cookie" cookie)
+                               htmx?  (merge htmx/fragment-headers)
+                               (and htmx? token) (assoc (str/lower-case security/csrf-header) token))}
+      qs    (assoc :query-string qs)
+      bytes (-> (assoc :body (java.io.ByteArrayInputStream. bytes)
+                       :content-length (alength ^bytes bytes)
+                       :content-type "application/x-www-form-urlencoded; charset=UTF-8")
+                (assoc-in [:headers "content-type"] "application/x-www-form-urlencoded; charset=UTF-8")
+                (assoc-in [:headers "content-length"] (str (alength ^bytes bytes)))))))
+
+(defn- location [response]
+  (first (header-values (:headers response) "Location")))
+
+(def ^:private redirect? #{301 302 303})
+
+(def ^:private max-redirects
+  "A bound on a chain of redirects, so a loop in the host is a red and never a hang."
+  10)
+
+(defn visit
+  "The browser after sending `method` (`:get` or `:post`) to `path` with form `params`,
+  holding the final `:response`.
+
+  - A POST carries the CSRF token of the last page that had one, as the hidden field a
+    form would send — or, with `{:htmx? true}`, as the header the shell makes htmx send,
+    with the headers of a swap. A POST with no token known throws: a 403 that looked
+    like the application's fault is the failure it replaces. After a login the session,
+    and with it the token, is new — GET a page before the next POST.
+  - A 301, 302 or 303 is followed as a GET through the same jar, up to ten times; an
+    `HX-Redirect` is left in the response for the test to read, as htmx would act on it
+    and a server-side test cannot.
+  - `{:remote-addr \"…\"}` sets the source address, for anything keyed by it.
+
+  The jar keeps what `cookies` reads — a cookie set again replaces the old value and a
+  deletion (`Max-Age` of zero or less, which is how Ring deletes) forgets it — and
+  ignores `Path`, `Domain` and `Expires`: one site, every path."
+  ([b method path] (visit b method path nil nil))
+  ([b method path params] (visit b method path params nil))
+  ([b method path params opts]
+   (when (and (= :post method) (not (:token b)))
+     (throw (ex-info (str "web-base testing: a POST to " path " with no CSRF token — GET a page that"
+                          " carries one first")
+                     {:path path})))
+   (loop [b b method method path path params params hops 0]
+     (let [response ((:handler b) (request-of b method path params opts))
+           b        (assoc b
+                           :response response
+                           :jar (into {} (remove (comp nil? val)) (merge (:jar b) (cookies response)))
+                           :token (or (csrf-token response) (:token b)))]
+       (if (and (redirect? (:status response)) (location response))
+         (if (< hops max-redirects)
+           (recur b :get (location response) nil (inc hops))
+           (throw (ex-info (str "web-base testing: more than " max-redirects " redirects from " path)
+                           {:path path})))
+         b)))))

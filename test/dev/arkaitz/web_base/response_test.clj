@@ -30,3 +30,10 @@
     (is (= {:status 200 :headers headers :body "<!DOCTYPE html>\n<div id=\"outer\"><article id=\"titled\"><h1></h1><p>x</p></article></div>"}
            (render/response page (response/ok b) stack))
         "ok without options leaves render its default: whole stack and doctype")))
+
+(deftest unprocessable-is-ok-with-422-in-both-arities
+  (is (= {:status 422 :body [:p "x"]} (response/unprocessable [:p "x"])))
+  (is (= {:status 422 :body [:p "x"] :wb/slots {:title "T"} :wb/height 1}
+         (response/unprocessable [:p "x"] {:slots {:title "T"} :height 1})))
+  (is (= {:status 422 :body [:p "x"]} (response/unprocessable [:p "x"] {}))
+      "an option not given stays absent, as in ok"))

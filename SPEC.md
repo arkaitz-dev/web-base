@@ -145,6 +145,17 @@ pins an old htmx after an upgrade); `not-found`/`forbidden` constructors (they
 would bypass the error renderer — `error/throw!` is that); a validation helper
 (couples the base to a schema library).
 
+*Amended on 2026-09-25, from four hosts' evidence:* a form's **round trip** is the base's,
+though validation still is not. db-base's hosts measured the cost of its absence
+(`FRICTION.md`, F3): a form that failed validation either reached the 400 error page or
+redirected with a flag in the query string, losing what the person typed. What the base
+now ships knows no schema and validates nothing: `rerender` renders a route's own GET
+again with `:wb/form` on the request and status 422, and `response/unprocessable` is `ok`
+with 422 for the handler that renders its own fragment. The host decides what is invalid
+and what `:wb/form` holds; the base only owns getting the page back, with its gate,
+layouts and CSRF token, which is the part every host would otherwise rebuild. The 422
+relies on htmx 4, which swaps every response but 204 and 304 — htmx 2 swapped no 4xx.
+
 ## 8 · Its own harness
 
 web-base ships a **tiny demo application** that uses nothing but web-base: a couple of

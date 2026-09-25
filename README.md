@@ -240,9 +240,18 @@ handler** — with malli:
   (let [values (select-keys (:form-params request) ["name" "email"])
         parsed (m/decode Signup values (mt/string-transformer))]
     (if-let [explanation (m/explain Signup parsed)]
-      (response/ok (signup-form values (me/humanize explanation)))
+      (wb/rerender request "/signup" {:values values :errors (me/humanize explanation)})
       (response/see-other "/welcome"))))
 ```
+
+`wb/rerender` renders the page's own GET again — its gate, layouts and CSRF token
+included — with `{:values … :errors …}` under `:wb/form` on the request and status 422,
+so the GET handler that draws the form draws it refused too, and no redirect loses what
+was typed. Give the form the same path for GET and POST and a reload does the sensible
+thing. A form that swaps only itself with htmx answers its own fragment with
+`response/unprocessable` instead, because the page's GET would render the whole page's
+content into the form's target. Both rely on htmx 4 swapping a 422; under htmx 2 a host
+would have to allow it in `htmx.config.responseHandling`.
 
 ### Internationalisation
 

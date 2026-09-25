@@ -21,3 +21,12 @@
   empty body is what the gate's own redirect carries."
   [location]
   {:status 303 :headers {"Location" location} :body ""})
+
+(defn unprocessable
+  "`ok` with status 422: a form that came back with its errors, rendered by the handler
+  that refused it — the road for an htmx form that swaps only itself, where re-running
+  the page's GET would render more than the target. htmx 4 swaps a 422; htmx 2 swapped
+  no 4xx unless `htmx.config.responseHandling` said so. For a whole-page form,
+  `dev.arkaitz.web-base/rerender` renders the page's own GET instead."
+  ([body] (assoc (ok body) :status 422))
+  ([body opts] (assoc (ok body opts) :status 422)))

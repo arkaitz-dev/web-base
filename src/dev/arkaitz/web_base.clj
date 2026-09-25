@@ -30,14 +30,72 @@
             [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.server :as server]
             [dev.arkaitz.web-base.session :as session]
+            [clojure.string :as str]
+            [reitit.core :as r]
             [reitit.ring :as ring]
             [reitit.ring.coercion :as coercion]
+            [ring.util.codec :as codec]
             [ring.middleware.not-modified :as not-modified]
             [ring.middleware.params :as params]))
 
 (def subject-present?
   "The stock gate predicate."
   gate/subject-present?)
+
+(defn rerender
+  "The page at `path` rendered again for the request a handler is answering, with
+  `form` — whatever the host's view reads, typically `{:values … :errors …}` — under
+  `:wb/form`, and status 422 when the page renders as an ordinary 200.
+
+  For a classic form that failed validation: the POST handler validates, and on
+  failure answers `(rerender request \"/things\" {:values v :errors e})`, so the
+  person gets the page they were on with what they typed and why it was refused —
+  without a redirect that loses both, and without the POST handler rebuilding the
+  page it does not own. The page's own `:get` handler runs, compiled as the router
+  compiled it: its gate, coercion and layouts apply as for any GET of that path. The
+  request keeps its session, subject, locale and CSRF token; its form, body and
+  parameters are dropped, and `path`'s own path and query parameters take their
+  place. Views read `(:wb/form request)`, whose shape is the host's.
+
+  A response the page answers with a redirect, an `HX-Redirect` or any status other
+  than 200 is returned as it is. An htmx form that swaps only itself wants
+  `response/unprocessable` with its own fragment instead, since the page's GET would
+  render the whole page's content into the form's target.
+
+  Throws when `path` has no `:get` route, and when the request already carries
+  `:wb/form` — a page that re-rendered into itself would never stop. Not a validation
+  helper: the base still knows no schema (SPEC §7).
+
+  **`path` is the host's own route, never input from the request.** Whatever GET it
+  names runs as a side effect of this POST, as the caller — a logout, a link's
+  redemption — so a path taken from a form field would let whoever submits it choose
+  which."
+  [request path form]
+  (when (contains? request :wb/form)
+    (throw (ex-info (str "web-base rerender: " path " was reached from a rerender already")
+                    {:path path})))
+  (let [[uri qs] (str/split (str path) #"\?" 2)
+        match    (some-> (::r/router request) (r/match-by-path uri))
+        handler  (get-in match [:result :get :handler])]
+    (when-not handler
+      (throw (ex-info (str "web-base rerender: no GET route for " path) {:path path})))
+    (let [query    (if qs (codec/form-decode qs "UTF-8") {})
+          query    (if (map? query) query {})
+          response (handler (-> request
+                                (dissoc :form-params :multipart-params :body :body-params :parameters
+                                        :query-string :path-info)
+                                (assoc :request-method :get
+                                       :uri uri
+                                       :query-params query
+                                       :params query
+                                       :path-params (:path-params match)
+                                       ::r/match match
+                                       :wb/form form)
+                                (cond-> qs (assoc :query-string qs))))]
+      (if (and (= 200 (:status response))
+               (not (contains? (:headers response) "HX-Redirect")))
+        (assoc response :status 422)
+        response))))
 
 (defn- require-key! [config k]
   (when (nil? (get config k))

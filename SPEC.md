@@ -1,6 +1,6 @@
 # web-base — specification
 
-> **Coordinates.** Directory `arkaitz-dev-web-base` · repository `arkaitz-dev/web-base`
+> **Coordinates.** Directory `web-base` · repository `arkaitz-dev/web-base`
 > · artifact `dev.arkaitz/web-base`.
 >
 > **Status.** Specification, briefly. This is a small piece and does not warrant the

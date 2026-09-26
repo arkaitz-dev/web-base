@@ -31,7 +31,7 @@ clojure -M:test                       # whole suite incl. demo/test; exit ≠ 0 
 clojure -M:test -n <namespace>        # one namespace (several -n allowed)
 clojure -T:build jar                  # library jar → target/web-base-0.5.0.jar (no demo inside)
 clojure -T:build install              # jar + pom into ~/.m2; consumed by :mvn/version (verified from another project)
-clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD; run for 0.1.0 to 0.4.0
+clojure -T:build deploy               # to Clojars with CLOJARS_USERNAME/CLOJARS_PASSWORD; run for 0.1.0 to 0.5.0
 WB_SESSION_KEY=<base64 of 16 bytes> clojure -M:demo [port]   # the demo, default port 3000
 clojure -M:demo [port]                # the same, with the key in ./env.local.edn (git-ignored)
 clojure -T:build demo-uber            # runnable demo → target/web-base-demo-0.5.0.jar (18 MB, never published)

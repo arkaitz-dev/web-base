@@ -613,6 +613,14 @@ this base's product.
   own assets are served from outside the session, CSRF and locale layers: a stylesheet
   fetch never reads the store nor mints a session cookie, and a shared cache may keep
   the file. They still carry the request id and the headers above.
+- **Sessionless routes answer before the session too** (2026-09-26). `:sessionless`
+  maps exact paths to handlers mounted where the assets are: a load balancer's
+  `/health`, a webhook. They read no session and write none, whatever cookie arrives,
+  and carry the request id and the headers above; a throw or a nil answer is the base's
+  500, never a fall-through into the session. They take no CSRF token, which is correct
+  only because they have no session to act on: a route that changes anything a session
+  owns does not belong there. A path the router also matches is refused at construction,
+  so no route — a gated one above all — can be opened by naming it here.
 - **Behind a proxy**, opt-in: scheme and client address from `X-Forwarded-Proto` and
   `X-Forwarded-For`, only when the host says the proxy is trusted.
 

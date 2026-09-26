@@ -6,14 +6,16 @@
   The wiring convention IS the product, so here it is, outermost first:
 
     request-id → security headers → proxy (opt-in)
-    → [/wb/ assets → host static → ] session → params → i18n → csrf → subject
+    → [/wb/ assets → sessionless routes → host static → ] session → params → i18n → csrf → subject
     → ring-handler
         router, per matched route: error → gate → render → coercion → handler
         default handler: 404 / 405 / nil-handler 500
 
   Static assets answer before the session: a stylesheet fetch must not mint a
   session cookie, and a cookie on an asset defeats shared caches. They still
-  carry the request id and the security headers. Session sits outside subject
+  carry the request id and the security headers. So do the host's `:sessionless`
+  routes — a health probe, a webhook — which read no session and write none, whatever
+  cookie arrives. Session sits outside subject
   (the subject function reads the session) and outside csrf (the token lives
   in the session); params sits outside csrf because the token may arrive as a
   form field; i18n sits outside csrf so a refused request's error page speaks
@@ -31,6 +33,7 @@
             [dev.arkaitz.web-base.server :as server]
             [dev.arkaitz.web-base.session :as session]
             [clojure.string :as str]
+            [clojure.tools.logging :as tools-log]
             [reitit.core :as r]
             [reitit.ring :as ring]
             [reitit.ring.coercion :as coercion]
@@ -104,15 +107,51 @@
 (def ^:private base-assets
   (ring/create-resource-handler {:path "/wb/" :root "dev/arkaitz/web_base/public"}))
 
+(defn- sessionless-handler
+  "The host's `:sessionless` routes, by exact path and any method, each inside the
+  base's error middleware so a throw renders the base's 500 rather than reaching the
+  server. A nil answer is a 500 too, logged: falling through to the next handler would
+  hand the request to the session this mount exists to avoid."
+  [routes render-error]
+  (when (seq routes)
+    (let [wrap     (:wrap (error/middleware render-error))
+          handlers (update-vals routes wrap)]
+      (fn [request]
+        (when-let [h (get handlers (:uri request))]
+          (or (h request)
+              (do (tools-log/error "sessionless handler returned nil" {:request-id (:wb/request-id request)
+                                                                :uri        (:uri request)})
+                  (render-error {:status 500} request))))))))
+
+(defn- validate-sessionless! [routes]
+  (when (some? routes)
+    (when-not (and (map? routes)
+                   (every? #(and (string? %) (str/starts-with? % "/") (not (str/starts-with? % "/wb/"))) (keys routes))
+                   (every? #(or (fn? %) (var? %)) (vals routes)))
+      (throw (ex-info (str "web-base config :sessionless must be a map of path to handler, each path"
+                           " starting with / and none under /wb/, which is the base's")
+                      {:config-key [:sessionless]})))))
+
+(defn- refuse-shadowing!
+  "A sessionless path the router also matches would serve that route with no gate, no
+  subject, no session and no CSRF — silently, and a gated page would be open. Refused at
+  construction, naming the path."
+  [router routes]
+  (when-let [taken (first (sort (filter #(r/match-by-path router %) (keys routes))))]
+    (throw (ex-info (str "web-base config :sessionless path " taken " is also one of :routes;"
+                         " it would be served without the route's gate, session or CSRF")
+                    {:config-key [:sessionless taken]}))))
+
 (defn- with-assets
   "Assets first — the base's `/wb/` before the host's, so a host file cannot
-  shadow the base's own — then `app` for everything else. Only the assets
-  answer conditional GETs with a 304: the resource handlers emit
-  `Last-Modified` and nothing else honoured it, so every page load re-sent
-  htmx whole."
-  [static app]
+  shadow the base's own — then the host's sessionless routes, then `app` for
+  everything else. Only the assets answer conditional GETs with a 304: the
+  resource handlers emit `Last-Modified` and nothing else honoured it, so every
+  page load re-sent htmx whole."
+  [static sessionless app]
   (apply ring/routes
          (remove nil? [(not-modified/wrap-not-modified base-assets)
+                       sessionless
                        (when static
                          (not-modified/wrap-not-modified
                           (ring/create-resource-handler (merge {:path "/"} static))))
@@ -131,13 +170,18 @@
     :i18n         `{:dict … :default-locale … :locale-fn …}` (optional)
     :security     `{:frame-options … :csp … :hsts … :proxy? …}` (optional)
     :csrf         false to disable the anti-forgery token (on for anything else, nil included)
+    :sessionless  `{\"/health\" handler}` — exact paths answered before the session, CSRF,
+                  i18n and subject, with the request id and security headers only; a
+                  handler is a function or a var, and a path one of :routes also
+                  matches is refused (optional)
 
   Unknown keys are the host's own business. Every failure of a required or
   malformed value is raised here, at construction."
-  [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf]
+  [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless]
     :as   config}]
   (require-key! config :routes)
   (require-key! config :session)
+  (validate-sessionless! sessionless)
   ;; Explicit nils — a config map assembled from an absent setting — must not
   ;; switch protection off or leave a function unbound.
   (let [subject-fn   (or subject-fn (constantly nil))
@@ -150,13 +194,14 @@
                                                                render/middleware
                                                                coercion/coerce-request-middleware]}
                                            coercion (assoc :coercion coercion))})]
+    (refuse-shadowing! router sessionless)
     (-> (ring/ring-handler router (error/default-handler render-error))
         (gate/wrap-subject subject-fn)
         (cond-> csrf? (security/wrap-csrf render-error))
         (cond-> i18n (i18n/wrap i18n))
         params/wrap-params
         (session/wrap (:session config))
-        (->> (with-assets static))
+        (->> (with-assets static (sessionless-handler sessionless render-error)))
         (cond-> (:proxy? security) security/wrap-proxy)
         (security/wrap-headers security)
         log/wrap-request-id)))

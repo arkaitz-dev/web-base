@@ -175,6 +175,7 @@ on demand.
 | `:i18n` | `{:dict tempura-dict :default-locale k :locale-fn (fn [request] preferences)}` |
 | `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age n} :proxy? bool}` |
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
+| `:sessionless` | `{"/health" handler}`: exact paths, any method, answered before the session — no session read or written, no CSRF, no locale, no subject; the request id and security headers still apply. A handler may be a var; a path one of `:routes` also matches is refused |
 
 Every malformed or missing required value fails at construction, naming the key.
 
@@ -183,7 +184,7 @@ Every malformed or missing required value fails at construction, naming the key.
 It is the product, so it is written down, outermost first:
 
 ```
-request-id → security headers → proxy (opt-in) → [assets] → session → params
+request-id → security headers → proxy (opt-in) → [assets, sessionless] → session → params
 → i18n → csrf → subject → router: error → gate → render → coercion → handler
 ```
 

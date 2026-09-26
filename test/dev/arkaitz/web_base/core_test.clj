@@ -254,3 +254,67 @@
                           ["the default 404" "/nope"]]]
       (let [r (app (mock/request :get path))]
         (is (= [0 nil] [@writes (cookie r)]) (str label ": no session written and no cookie set (" (:status r) ")"))))))
+
+(deftest a-sessionless-route-reads-no-session-and-writes-none-whatever-cookie-arrives
+  (let [reads   (atom 0)
+        writes  (atom 0)
+        store   (reify ring.middleware.session.store/SessionStore
+                  (read-session [_ _] (swap! reads inc) {:user "ann"})
+                  (write-session [_ k _] (swap! writes inc) (or k "fresh"))
+                  (delete-session [_ _] nil))
+        health  (fn [r] {:status 200 :headers {"Content-Type" "text/plain"}
+                         :body (pr-str [(contains? r :session) (:wb/subject r) (:anti-forgery-token r)])})
+        app     (wb/handler (config :session {:store store} :sessionless {"/health" health}))
+        cookie  "ring-session=old"]
+    (app (mock/header (mock/request :get "/me") "Cookie" cookie))
+    (is (= 1 @reads) "control: a routed request with that cookie reads the store")
+    (reset! reads 0)
+    (let [r (app (mock/header (mock/request :get "/health") "Cookie" cookie))]
+      (is (= [200 "[false nil nil]"] [(:status r) (:body r)])
+          "the handler saw no session, no subject and no token: it ran outside all three")
+      (is (= [0 0 nil] [@reads @writes (get-in r [:headers "Set-Cookie"])])
+          "and the store was neither read nor written, and no cookie was set")
+      (is (= SEC (select-keys (:headers r) (keys SEC))) "with the security headers")
+      (is (re-matches id-pattern (str (id-of r))) "and the request id"))
+    (is (= 200 (:status (app (mock/request :post "/health")))) "any method, and no CSRF token asked for")))
+
+(deftest a-sessionless-handler-that-throws-or-answers-nil-is-the-bases-500-never-the-apps
+  (let [writes (atom 0)
+        store  (reify ring.middleware.session.store/SessionStore
+                 (read-session [_ _] nil)
+                 (write-session [_ k _] (swap! writes inc) (or k "fresh"))
+                 (delete-session [_ _] nil))
+        app    (wb/handler (config :session {:store store}
+                                   :sessionless {"/throws" (fn [_] (throw (ex-info "secret detail" {})))
+                                                 "/void"   (fn [_] nil)}))]
+    (doseq [path ["/throws" "/void"]]
+      (let [r (app (mock/header (mock/request :get path) "Accept" "text/plain"))]
+        (is (= [500 "500"] [(:status r) (:body r)]) (str path ": the base's 500, with nothing of the throw in it"))
+        (is (= 0 @writes) (str path ": and it never fell through to the app or its session"))))
+    (lt/with-log
+      (app (mock/request :get "/void"))
+      (is (some #(and (= :error (:level %))
+                      (clojure.string/starts-with? (str (:message %)) "sessionless handler returned nil {:request-id "))
+                (lt/the-log))
+          (str "a nil answer is logged at error, as the docstring says: " (mapv :message (lt/the-log)))))))
+
+(deftest a-sessionless-path-the-router-also-matches-is-refused-at-construction
+  (is (= ["web-base config :sessionless path /priv is also one of :routes; it would be served without the route's gate, session or CSRF"
+          {:config-key [:sessionless "/priv"]}]
+         (try (wb/handler (config :sessionless {"/health" identity "/priv" identity})) nil
+              (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
+      "a gated page cannot be opened by naming it here")
+  (is (fn? (wb/handler (config :sessionless {"/health" #'identity})))
+      "control: a path no route matches is taken, and a var is a handler too"))
+
+(deftest sessionless-config-is-refused-at-construction-when-malformed
+  (doseq [[label bad] [["not a map" [["/health" identity]]]
+                       ["a path without a leading slash" {"health" identity}]
+                       ["a path under the base's /wb/" {"/wb/health" identity}]
+                       ["a handler that is not a function" {"/health" "ok"}]]]
+    (is (= ["web-base config :sessionless must be a map of path to handler, each path starting with / and none under /wb/, which is the base's"
+            {:config-key [:sessionless]}]
+           (try (wb/handler (config :sessionless bad)) nil
+                (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
+        label))
+  (is (fn? (wb/handler (config :sessionless nil))) "control: nil is the absent option"))

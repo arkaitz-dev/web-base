@@ -131,6 +131,14 @@ has to be opened deliberately. **Every one of these fails silently.**
   mechanism belongs to the base but only the auth module knows when someone has just
   authenticated, so the base must *expose* rotation and the consumer must call it.
   Unsaid, it does not get done, and it produces no symptom (SPEC §11).
+- **The CSRF token sticks only when read through `csrf-token`/`csrf-field`**
+  (2026-09-26, SPEC §15). Anything that reads `:anti-forgery-token` directly, or builds
+  a body after the handler returned, mints a token that is never stored — the form
+  built with it earns a 403, which is loud, but only when someone submits it. **Open,
+  found by the design panel and older than the change:** a login response that renders a
+  page instead of redirecting shows the pre-rotation token while the rotated session
+  holds none, so the next POST is refused. Every host redirects after login today, so it
+  has no symptom yet.
 - **Keep the htmx coupling in three named, isolated places** — `HX-Request`,
   `HX-Redirect`, the error renderer. Not an abstraction layer to support alternatives;
   simply do not scatter `HX-` strings through the codebase (SPEC §9).

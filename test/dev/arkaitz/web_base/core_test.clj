@@ -157,11 +157,11 @@
     (is (= (page 404 (frag 404)) (:body (app (mock/request :get "/nope")))) "and the error page has no lang")))
 
 (deftest static-serving-host-assets-and-the-base-wb-mount-takes-precedence-over-a-host-file
-  ;; CSRF on: a plain GET through the session mints a cookie (the token), so
-  ;; the absence of Set-Cookie on an asset is measured against a stack that
+  ;; CSRF on: a GET that renders the token mints a session cookie, so the
+  ;; absence of Set-Cookie on an asset is measured against a stack that
   ;; demonstrably sets one.
   (let [app (wb/handler (config))]
-    (is (some? (get-in (app (mock/request :get "/me")) [:headers "Set-Cookie"])) "control: a routed GET does mint a session cookie")
+    (is (some? (get-in (app (mock/request :get "/token")) [:headers "Set-Cookie"])) "control: a routed GET that renders the token does mint a session cookie")
     (let [r (app (mock/request :get "/host.txt"))]
       (is (= [200 "HOST-ASSET\n" "text/plain"] [(:status r) (slurp (:body r)) (get-in r [:headers "Content-Type"])]) "the host's asset")
       (is (= SEC (select-keys (:headers r) (keys SEC))) "with the security headers")
@@ -237,3 +237,20 @@
       (is (= [200 "<!DOCTYPE html>\n<p>x</p>" STAMP] [(:status r) (:body r) (get-in r [:headers "Last-Modified"])])
           "a routed response with Last-Modified is never 304'd: the app sits outside wrap-not-modified")
       (is (= (dissoc r :headers) (dissoc plain :headers)) "the same response as without the conditional header"))))
+
+(deftest an-anonymous-request-that-renders-no-token-writes-no-session-through-the-whole-stack
+  (let [writes (atom 0)
+        store  (reify ring.middleware.session.store/SessionStore
+                 (read-session [_ _] nil)
+                 (write-session [_ k _] (swap! writes inc) (or k "fresh"))
+                 (delete-session [_ _] nil))
+        app    (wb/handler (config :session {:store store}))
+        cookie #(get-in % [:headers "Set-Cookie"])]
+    (let [r (app (mock/request :get "/token"))]
+      (is (= [1 true] [@writes (some? (cookie r))]) "control: a page that renders the token writes one session"))
+    (reset! writes 0)
+    (doseq [[label path] [["a route that never reads the token" "/me"]
+                          ["the gate's redirect to the login" "/priv"]
+                          ["the default 404" "/nope"]]]
+      (let [r (app (mock/request :get path))]
+        (is (= [0 nil] [@writes (cookie r)]) (str label ": no session written and no cookie set (" (:status r) ")"))))))

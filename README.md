@@ -225,7 +225,10 @@ such layout, with slots `:lang :title :head :header :nav :identity :content
 :footer`; it links `/wb/wb.css` (structural CSS, every colour a `--wb-*` custom
 property you redefine) and `/wb/htmx.min.js`, and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it. Classic forms
-add `(security/csrf-field request)`.
+add `(security/csrf-field request)`. A token is stored in the session only when a
+request read it through `csrf-field` or `csrf-token`, so an anonymous request that
+renders neither — a health probe, JSON, a redirect — creates no session; read it through
+those two, while the handler runs, and never from `:anti-forgery-token` directly.
 
 ### Forms and validation
 

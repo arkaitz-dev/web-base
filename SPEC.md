@@ -598,6 +598,17 @@ this base's product.
   hidden field. Recorded honestly: `SameSite=Lax` and the custom header htmx already
   sends block cross-site requests in current browsers; the token is defence in depth,
   and the price of it is one small dependency on `ring-core` alone.
+  **Amended 2026-09-26: a token reaches the session only when the request used it.**
+  ring-anti-forgery's default strategy mints one on every request that passes and
+  writes it into any session that lacks one, so an anonymous `/health`, a JSON answer or
+  the gate's redirect each created a session — a row per load-balancer probe with a
+  server-side store (measured in db-base's hosts). The base's strategy is the library's
+  own with one change: `write-token` writes only if `security/csrf-token` was called
+  during the request, which `csrf-field` and the shell do. Validation is the library's,
+  untouched, so a token never written fails closed like a forged one. The cost is a rule:
+  read the token through `csrf-token` or `csrf-field` while the handler runs — reading
+  `:anti-forgery-token` directly, or building the body after the handler returned, mints
+  a token that is never stored and whose form earns a 403.
 - **Static assets answer before the session.** The base's `/wb/` files and the host's
   own assets are served from outside the session, CSRF and locale layers: a stylesheet
   fetch never reads the store nor mints a session cookie, and a shared cache may keep

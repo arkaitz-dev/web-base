@@ -155,9 +155,11 @@
 
 (defn- csrf-app
   "A spy handler behind csrf behind the session over a memory store the test
-  can read."
+  can read. It reads the token through `csrf-token` while it runs, as a page that
+  renders a form does — which is what makes the token stick (`wrap-csrf`)."
   [sessions seen]
   (session/wrap (security/wrap-csrf (fn [r]
+                                      (security/csrf-token r)
                                       ;; The dynamic var is bound only while the handler runs.
                                       (reset! seen (assoc r ::bound (force anti-forgery/*anti-forgery-token*)))
                                       {:status 200 :body "x"})
@@ -254,7 +256,8 @@
 
 (deftest csrf-under-the-cookie-store--the-token-survives-sealing-and-a-post-with-cookie-and-token-passes
   (let [seen  (atom nil)
-        app   (session/wrap (security/wrap-csrf (fn [r] (reset! seen r) {:status 200 :body "x"}) render-error)
+        app   (session/wrap (security/wrap-csrf (fn [r] (reset! seen r) (security/csrf-token r) {:status 200 :body "x"})
+                                                render-error)
                             {:key "AAECAwQFBgcICQoLDA0ODw=="})
         first* (app req)
         raw    (str (first (get-in first* [:headers "Set-Cookie"])))
@@ -265,3 +268,38 @@
     (is (= {:status 200 :body "x"} (app (mock/header post "X-CSRF-Token" t))) "cookie + token passes, session not re-sealed")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app post)) "cookie without token")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header (mock/request :post "/") "X-CSRF-Token" t))) "token without cookie")))
+
+(deftest csrf-writes-a-token-into-the-session-only-for-a-request-that-used-it
+  (let [sessions (atom {})
+        reads    (fn [r] {:status 200 :body (str (security/csrf-token r))})
+        ignores  (fn [_] {:status 200 :body "no form here"})
+        app      (fn [h] (session/wrap (security/wrap-csrf h render-error) {:store (memory/memory-store sessions)}))
+        quiet    ((app ignores) req)]
+    (is (= [{} nil] [@sessions (get-in quiet [:headers "Set-Cookie"])])
+        "an anonymous request that renders no token writes no session and sets no cookie")
+    (let [loud (app reads)
+          r    (loud req)
+          sid  (sid-of r)]
+      (is (some? sid) "control: one that renders the token does get a session")
+      (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token (:body r)}} @sessions)
+          "holding exactly the token it rendered, so the form built with it will pass")
+      (is (= {:status 200 :body "x"}
+             ((session/wrap (security/wrap-csrf ok render-error) {:store (memory/memory-store sessions)})
+              (mock/header (with-sid (mock/request :post "/") sid) "X-CSRF-Token" (:body r))))
+          "and a POST carrying it passes"))
+    (let [both   (app (fn [r] (if (= "/form" (:uri r)) (reads r) (ignores r))))
+          before (count @sessions)]
+      (both (mock/request :get "/form"))
+      (is (= (inc before) (count @sessions)) "precondition: a request that used the token wrote one")
+      (is (nil? (get-in (both (mock/request :get "/plain")) [:headers "Set-Cookie"]))
+          "and the next anonymous request through the same middleware, using none, writes none — the flag is per request")
+      (is (= (inc before) (count @sessions)) "no session row either"))))
+
+(deftest csrf-token-marks-only-a-request-that-carries-a-token-and-never-throws-on-a-bare-map
+  (is (nil? (security/csrf-token {})) "nothing to read, nothing marked, no exception")
+  (is (= "T" (security/csrf-token {:anti-forgery-token "T"})) "a request built by hand, with no flag, still answers")
+  (let [flag (volatile! false)]
+    (security/csrf-token {::security/csrf-used flag})
+    (is (false? @flag) "no token on the request: the flag stays down")
+    (security/csrf-token {::security/csrf-used flag :anti-forgery-token "T"})
+    (is (true? @flag) "a token read: the flag is up")))

@@ -8,7 +8,9 @@
   trigger filters need `unsafe-eval` or the `hx-csp` extension; a strict
   policy means doing without them, which the demo does."
   (:require [clojure.string :as str]
-            [ring.middleware.anti-forgery :as anti-forgery])
+            [ring.middleware.anti-forgery :as anti-forgery]
+            [ring.middleware.anti-forgery.session :as anti-forgery-session]
+            [ring.middleware.anti-forgery.strategy :as strategy])
   (:import [java.security SecureRandom]
            [java.util Base64]))
 
@@ -98,24 +100,57 @@
                  (#{"http" "https"} proto) (assoc :scheme (keyword proto))
                  for                       (assoc :remote-addr for))))))
 
+(defn- lazy-session-strategy
+  "ring-anti-forgery's own session strategy — the same token, the same constant-time
+  check — except that a token is written into the session only when the request used
+  it. The library's default writes one on every request that lacks it, so a health
+  probe, a JSON endpoint or a redirect each created a session: a row, with a
+  server-side store. Validation is untouched, so a token that was never written fails
+  closed like any other."
+  []
+  (let [inner (anti-forgery-session/session-strategy)]
+    (reify strategy/Strategy
+      (get-token [_ request] (strategy/get-token inner request))
+      (valid-token? [_ request token] (strategy/valid-token? inner request token))
+      (write-token [_ request response token]
+        (if (some-> (::csrf-used request) deref)
+          (strategy/write-token inner request response token)
+          response)))))
+
 (defn wrap-csrf
   "ring-anti-forgery inside the session: every request not GET/HEAD/OPTIONS
   needs the session's token, read from the `__anti-forgery-token` form field
   or the `X-CSRF-Token` header — which the shell makes htmx send on every
   request (the library also honours `X-XSRF-Token`; the base documents one
   name). A refusal is the base's own 403 datum, so an htmx swap receives a
-  fragment and a navigation a page."
+  fragment and a navigation a page.
+
+  **A token reaches the session only if the request used it** — through
+  `csrf-token` or `csrf-field`, which the shell calls for every page it renders,
+  and while the handler runs. A request that renders neither writes no session, so
+  an anonymous `/health`, a JSON answer or a redirect leaves no row behind. Reading
+  `:anti-forgery-token` or ring-anti-forgery's dynamic var directly, or reading the
+  token after the handler returned (a body built lazily later), mints a token that is
+  never stored: the form built with it earns a 403."
   [handler render-error]
-  (anti-forgery/wrap-anti-forgery
-   handler
-   {:error-handler (fn [request] (render-error {:status 403} request))}))
+  (let [protected (anti-forgery/wrap-anti-forgery
+                   handler
+                   {:error-handler (fn [request] (render-error {:status 403} request))
+                    :strategy      (lazy-session-strategy)})]
+    ;; A flag of this request's own: one made when the middleware was built would be
+    ;; shared by every request after the first that used a token.
+    (fn [request]
+      (protected (assoc request ::csrf-used (volatile! false))))))
 
 (def csrf-header "X-CSRF-Token")
 
 (defn csrf-token
-  "The request's token, for the host's own markup."
+  "The request's token, for the host's own markup — and the read that makes it stick:
+  a token nobody read through here is not written into the session (`wrap-csrf`)."
   [request]
-  (:anti-forgery-token request))
+  (when-let [token (:anti-forgery-token request)]
+    (some-> (::csrf-used request) (vreset! true))
+    token))
 
 (defn csrf-field
   "The hidden input a classic form needs; htmx requests carry the header

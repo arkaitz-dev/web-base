@@ -7,8 +7,7 @@
   (:require [clojure.java.io :as io]
             [demo.system]
             [dev.arkaitz.web-base.config :as config]
-            [dev.arkaitz.web-base.integrant :as wbi]
-            [integrant.core :as ig]))
+            [dev.arkaitz.web-base.integrant :as wbi]))
 
 (def env-file
   "Where the demo looks for the variables `config.edn` needs, so a development
@@ -22,23 +21,9 @@
    (wbi/read-string (config/env-file-readers env-file)
                     (slurp (io/resource "config.edn")))))
 
-(defn- with-port
-  "The config with the port replaced, or nil when the argument is not a
-  usable port number."
-  [config port]
-  (when-let [n (parse-long port)]
-    (when (< 0 n 65536)
-      (assoc-in config [:dev.arkaitz.web-base/server :port] n))))
-
-(defn -main [& [port]]
-  (let [config (if port (with-port (read-config) port) (read-config))]
-    (if-not config
-      (binding [*out* *err*]
-        (println (str "Invalid port: " port " (expected 1-65535)"))
-        (System/exit 1))
-      (let [system (ig/init config)]
-        (println (str "Demo listening on http://localhost:" (get-in system [:dev.arkaitz.web-base/server :port])))
-        ;; Jetty does not join, so the main thread would exit and take the
-        ;; JVM down with it.
-        (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable #(ig/halt! system)))
-        @(promise)))))
+(defn -main [& args]
+  (wbi/run! {:config    "config.edn"
+             :env-file  env-file
+             :port-path [:dev.arkaitz.web-base/server :port]
+             :banner    #(str "Demo listening on http://localhost:" (get-in % [:dev.arkaitz.web-base/server :port]))}
+            args))

@@ -1,0 +1,2 @@
+;; Fixture for the subprocess test of `run!`'s shutdown hook.
+{:test.run/marker #wb/env "WB_TEST_MARKER"}

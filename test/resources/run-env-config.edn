@@ -1,0 +1,3 @@
+;; Fixture: `WB_TEST_FALLBACK` is set by env-fallback.edn only, so this resolves only
+;; when the host names that file.
+{:test.run/fallback #wb/env "WB_TEST_FALLBACK"}

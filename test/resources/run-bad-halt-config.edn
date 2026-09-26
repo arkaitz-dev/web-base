@@ -1,0 +1,4 @@
+;; Fixture: the first key cannot be halted after the second fails to start.
+{:test.run/bad-halter {}
+ :test.run/secretive  {:first    #ig/ref :test.run/bad-halter
+                       :password "S3CRET-7f3a"}}

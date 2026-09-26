@@ -117,6 +117,14 @@ have to maintain separately, which is worse than not extracting it.
 doubt, leave it in the consumer. Moving code *into* a library later is cheap; getting
 it back *out* is not.
 
+*A second, 2026-09-26: `run!`* in the optional Integrant namespace — a host's whole
+`-main`. Five mains had been written by hand across the consumers, web-base's own demo
+among them, each reading the config, validating a port, starting, hooking the shutdown
+and blocking, and differing only in their mistakes: one ignored a bad port silently,
+none halted a system that failed halfway, and none knew that Integrant's failure carries
+the configuration. It lives beside `read-string` because it is Integrant's lifecycle and
+nothing else; a host that wires by hand never loads it.
+
 *The one deliberate exception, 2026-09-09:* `dev.arkaitz.web-base.native`, an
 optional namespace teaching Ring to read a classpath resource inside a GraalVM
 native image. It is a pull from the first consumer, which §7 says to resist, and

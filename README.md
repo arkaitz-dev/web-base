@@ -412,6 +412,25 @@ in the same EDN; requiring that namespace is what adds the methods. Its
 two-argument form takes readers of your own, which is what the next section
 uses.
 
+A host's whole `-main` can be `run!`: it reads the resource (with the readers of the
+env file you name, and no other), puts a port given on the command line at the path you
+name, starts the system, prints your banner, halts on shutdown and blocks.
+
+```clojure
+(defn -main [& args]
+  (wbi/run! {:config    "config.edn"
+             :env-file  "env.local.edn"
+             :port-path [:my/port]
+             :banner    #(str "serving on " (get-in % [:dev.arkaitz.web-base/server :port]))}
+            args))
+```
+
+A bad port, a missing or malformed resource, a variable nobody set, a system that fails
+to start or a banner that throws is one line on stderr and exit status 1 — the failing
+key's own message, never the configuration: Integrant's own failure carries the resolved
+configuration of the key that threw, password included. Whatever had started is halted
+rather than leaked, and SIGTERM halts the running system.
+
 ### Configuration, and not exporting secrets on every start
 
 `#wb/env "VAR"` resolves while the config is read, and has no default form:

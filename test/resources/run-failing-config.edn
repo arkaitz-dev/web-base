@@ -1,0 +1,4 @@
+;; Fixture: a system whose second key throws after the first has started.
+{:test.run/first     {}
+ :test.run/secretive {:first    #ig/ref :test.run/first
+                      :password "S3CRET-7f3a"}}

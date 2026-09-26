@@ -1,0 +1,2 @@
+;; Fixture: a key that throws an exception with no message.
+{:test.run/silent {}}

@@ -24,7 +24,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.4.0"}
+dev.arkaitz/web-base {:mvn/version "0.5.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -481,14 +481,14 @@ and drop the variable:
 ```
 echo '{"WB_SESSION_KEY" "<base64 of 16 bytes>"}' > env.local.edn
 clojure -M:demo [port]
-clojure -T:build demo-uber && java -jar target/web-base-demo-0.4.0.jar [port]
+clojure -T:build demo-uber && java -jar target/web-base-demo-0.5.0.jar [port]
 ```
 
 ## Development
 
 ```
 clojure -M:test                 # the whole suite, demo included
-clojure -T:build jar            # target/web-base-0.4.0.jar
+clojure -T:build jar            # target/web-base-0.5.0.jar
 clojure -T:build install        # into ~/.m2
 CLOJARS_USERNAME=… CLOJARS_PASSWORD=<deploy token> clojure -T:build deploy
 ```

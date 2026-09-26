@@ -134,11 +134,13 @@ has to be opened deliberately. **Every one of these fails silently.**
 - **The CSRF token sticks only when read through `csrf-token`/`csrf-field`**
   (2026-09-26, SPEC §15). Anything that reads `:anti-forgery-token` directly, or builds
   a body after the handler returned, mints a token that is never stored — the form
-  built with it earns a 403, which is loud, but only when someone submits it. **Open,
-  found by the design panel and older than the change:** a login response that renders a
-  page instead of redirecting shows the pre-rotation token while the rotated session
-  holds none, so the next POST is refused. Every host redirects after login today, so it
-  has no symptom yet.
+  built with it earns a 403, which is loud, but only when someone submits it.
+- **The CSRF token never crosses a session rotation** (2026-09-26, SPEC §15). The rotated
+  session holds the token minted for it in that request, or none. Found while closing the
+  "login that renders a page" gap: the README's own login copied the old session, token
+  included, into the new one — a fixation hole with no symptom. A login page renders
+  through the base (its layouts get the fresh token); content that read the token before
+  rotating, or a body rendered as a string, is logged by name.
 - **Keep the htmx coupling in three named, isolated places** — `HX-Request`,
   `HX-Redirect`, the error renderer. Not an abstraction layer to support alternatives;
   simply do not scatter `HX-` strings through the codebase (SPEC §9).

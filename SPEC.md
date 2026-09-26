@@ -609,6 +609,16 @@ this base's product.
   read the token through `csrf-token` or `csrf-field` while the handler runs — reading
   `:anti-forgery-token` directly, or building the body after the handler returned, mints
   a token that is never stored and whose form earns a 403.
+  **Amended again 2026-09-26: the token never survives a rotation.** A response whose
+  session is marked for rotation leaves a new session holding the token minted for it
+  in that request — the render step mints one and renders the page with it — or none;
+  never the pre-login token, which whoever fixed the pre-login session knew. Until then
+  the README's own login, which copies the old session into the new one, carried that
+  token across, and a login that rendered a page instead of redirecting showed a token
+  its new session did not hold. A page rendered outside the base (a string body) cannot
+  be given the new token after the fact: the base logs it by name and the new session
+  still gets a fresh one. An htmx fragment that rotates is answered with `HX-Refresh`,
+  because the page around it keeps the old token in `<body>`'s `hx-headers`.
 - **Static assets answer before the session.** The base's `/wb/` files and the host's
   own assets are served from outside the session, CSRF and locale layers: a stylesheet
   fetch never reads the store nor mints a session cookie, and a shared cache may keep

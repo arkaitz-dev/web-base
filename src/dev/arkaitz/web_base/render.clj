@@ -11,6 +11,7 @@
   outer layout later never invalidates a height a handler already names."
   (:require [clojure.string :as str]
             [dev.arkaitz.web-base.htmx :as htmx]
+            [dev.arkaitz.web-base.security :as security]
             [hiccup2.core :as h]))
 
 (defn html
@@ -50,7 +51,11 @@
   (let [body (:body response)]
     (if-not (hiccup? body)
       (strip response)
-      (let [page?  (not (htmx/partial-request? request))
+      (let [;; A response that rotates the session is rendered with the token its new
+            ;; session will hold, not the one the request arrived with.
+            rotates? (:recreate (meta (:session response)))
+            request  (cond-> request rotates? security/rotate-token)
+            page?    (not (htmx/partial-request? request))
             total  (count stack)
             height (or (:wb/height response) (if page? total 0))]
         (when-not (and (nat-int? height) (<= height total))
@@ -65,7 +70,10 @@
               (assoc :headers
                      (cond-> (assoc headers "Vary" htmx/vary)
                        (not (header-present? headers "content-type"))
-                       (assoc "Content-Type" "text/html; charset=utf-8")))))))))
+                       (assoc "Content-Type" "text/html; charset=utf-8")))
+              ;; A fragment cannot replace the token in `<body>`'s hx-headers; the page
+              ;; around it must be reloaded to carry the rotated session's.
+              (cond-> (and rotates? (not page?)) htmx/refresh)))))))
 
 (def middleware
   "reitit middleware. Compiled per route so the layout stack is read from the

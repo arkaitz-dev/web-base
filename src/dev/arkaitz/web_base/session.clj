@@ -102,7 +102,13 @@
   Ring's recreate is a no-op. With a server-side store Ring deletes the old
   session first — with a nil key when the request was anonymous, which is
   the ordinary login — so a host's store must accept `delete-session` with
-  nil."
+  nil.
+
+  The CSRF token does not follow the rotation: the new session holds a token minted
+  for it in this request, or none (`security/rotate-token`). A response rendered
+  through the base — a login page — shows that fresh token; a redirect leaves the new
+  session without one until the next page. Copying the old session into `new-session`
+  is fine, its token is dropped: whoever fixed the old session knew it."
   [response new-session]
   (when-not (map? new-session)
     (throw (ex-info "rotate needs the new session as a map; nil would delete the session"

@@ -8,6 +8,7 @@
   trigger filters need `unsafe-eval` or the `hx-csp` extension; a strict
   policy means doing without them, which the demo does."
   (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [ring.middleware.anti-forgery :as anti-forgery]
             [ring.middleware.anti-forgery.session :as anti-forgery-session]
             [ring.middleware.anti-forgery.strategy :as strategy])
@@ -100,22 +101,59 @@
                  (#{"http" "https"} proto) (assoc :scheme (keyword proto))
                  for                       (assoc :remote-addr for))))))
 
+(def ^:private session-token-key
+  "Where ring-anti-forgery's session strategy keeps the token."
+  :ring.middleware.anti-forgery/anti-forgery-token)
+
+(defn- fresh-token
+  "A token of ring-anti-forgery's own shape — 60 random bytes, base64 unpadded. The
+  generator is made here, per call: one in a var root is baked into a native image."
+  []
+  (let [bytes (byte-array 60)]
+    (.nextBytes (java.security.SecureRandom.) bytes)
+    (.encodeToString (.withoutPadding (java.util.Base64/getEncoder)) bytes)))
+
+(defn- rotating? [response]
+  (boolean (:recreate (meta (:session response)))))
+
+(defn- rotated-session
+  "The session a rotating response leaves behind: holding the token minted for it in
+  this request, or none — never one from before the rotation. A pre-login token is
+  known to whoever fixed the pre-login session, so carrying it over, whether the host
+  copied the old session into the new one or the library did, would hand them the
+  logged-in session's token."
+  [request response]
+  (let [minted (some-> (::csrf-fresh request) deref)
+        used?  (some-> (::csrf-used request) deref)
+        token  (or minted
+                   (when used?
+                     (log/error (str "a response that rotates the session rendered a CSRF token the new"
+                                     " session cannot keep — render it through the base, or redirect")
+                                {:request-id (:wb/request-id request) :uri (:uri request)})
+                     (fresh-token)))
+        session (:session response)]
+    (assoc response :session (if token (assoc session session-token-key token) (dissoc session session-token-key)))))
+
 (defn- lazy-session-strategy
   "ring-anti-forgery's own session strategy — the same token, the same constant-time
   check — except that a token is written into the session only when the request used
   it. The library's default writes one on every request that lacks it, so a health
   probe, a JSON endpoint or a redirect each created a session: a row, with a
   server-side store. Validation is untouched, so a token that was never written fails
-  closed like any other."
+  closed like any other.
+
+  A response that rotates the session is the exception, whatever its body: its new
+  session gets the token minted for it by `rotate-token`, or none (`rotated-session`)."
   []
   (let [inner (anti-forgery-session/session-strategy)]
     (reify strategy/Strategy
       (get-token [_ request] (strategy/get-token inner request))
       (valid-token? [_ request token] (strategy/valid-token? inner request token))
       (write-token [_ request response token]
-        (if (some-> (::csrf-used request) deref)
-          (strategy/write-token inner request response token)
-          response)))))
+        (cond
+          (rotating? response)                 (rotated-session request response)
+          (some-> (::csrf-used request) deref) (strategy/write-token inner request response token)
+          :else                                response)))))
 
 (defn wrap-csrf
   "ring-anti-forgery inside the session: every request not GET/HEAD/OPTIONS
@@ -140,7 +178,24 @@
     ;; A flag of this request's own: one made when the middleware was built would be
     ;; shared by every request after the first that used a token.
     (fn [request]
-      (protected (assoc request ::csrf-used (volatile! false))))))
+      (protected (assoc request ::csrf-used (volatile! false) ::csrf-fresh (volatile! nil))))))
+
+(defn rotate-token
+  "`request` carrying a fresh CSRF token for a response that rotates the session, and
+  the token recorded so the rotated session keeps exactly it. The render step calls it
+  before turning such a response into HTML, so a login page's forms carry the token its
+  new session holds. The request unchanged when it went through no CSRF, or carries no
+  token. A token read before this — a handler whose own content called `csrf-field` —
+  cannot follow the rotation, and is logged by name."
+  [request]
+  (if-let [minted (and (:anti-forgery-token request) (::csrf-fresh request))]
+    (do (when (some-> (::csrf-used request) deref)
+          (log/error (str "a response that rotates the session read its CSRF token before the base"
+                          " rendered it — the form built with it will be refused; read it in a layout,"
+                          " or redirect")
+                     {:request-id (:wb/request-id request) :uri (:uri request)}))
+        (assoc request :anti-forgery-token (or @minted (vreset! minted (fresh-token)))))
+    request))
 
 (def csrf-header "X-CSRF-Token")
 

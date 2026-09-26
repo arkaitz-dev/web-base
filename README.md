@@ -147,6 +147,13 @@ It is the defence against session fixation, and skipping it produces no symptom
 at all: everything works, and an attacker who planted a session id before the
 login still holds a valid one after it.
 
+The CSRF token does not cross the rotation — copying the old session, as above, drops
+it. A redirect leaves the new session without one until the next page; a login that
+renders a page through the base shows the fresh token its new session holds, as long as
+the token is read in a layout (a form the handler built before rotating would carry the
+old one, and is logged by name). An htmx login answered with a fragment makes htmx reload
+the page (`HX-Refresh`), since only a whole page can replace the token in `<body>`.
+
 **On `http://localhost`, opt out of `Secure`.** The cookie carries
 `Secure`/`HttpOnly`/`SameSite=Lax` by default, and a browser drops a `Secure`
 cookie sent over plain HTTP without a word, so you get no session and no error:

@@ -28,6 +28,14 @@
     (and (= "true" (get headers "hx-request"))
          (not= "full" (get headers "hx-request-type")))))
 
+(defn refresh
+  "`response` asking htmx to reload the whole page. For a fragment that rotated the
+  session: the page it lands in still carries the old CSRF token in `<body>`'s
+  `hx-headers`, which only a full page can replace. htmx 4 reads it as
+  `hx.refresh === \"true\"` (measured in the bundled build)."
+  [response]
+  (assoc-in response [:headers "HX-Refresh"] "true"))
+
 (defn redirect
   "A response that makes htmx navigate the whole window to `location`. A `302`
   would be followed by htmx and its target swapped with the login page; and

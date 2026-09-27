@@ -5,6 +5,7 @@
   middleware sets, the CSRF token the shell and `security/csrf-field` emit —
   which is why the base owns these readers rather than every host's tests."
   (:require [clojure.string :as str]
+            [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.security :as security]))
 
@@ -166,6 +167,9 @@
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
   - `{:remote-addr \"…\"}` sets the source address, for anything keyed by it.
+  - `{:follow? false}` sends one request and follows nothing, for a test that asks who
+    answered: a handler that redirects to a gated page lands on the login page exactly
+    as the gate would. The jar still takes what the response set.
 
   The jar keeps what `cookies` reads — a cookie set again replaces the old value and a
   deletion (`Max-Age` of zero or less, which is how Ring deletes) forgets it — and
@@ -184,9 +188,23 @@
                            :path (let [[uri qs] (split-path path)] (cond-> uri qs (str "?" qs)))
                            :jar (into {} (remove (comp nil? val)) (merge (:jar b) (cookies response)))
                            :token (or (csrf-token response) (:token b)))]
-       (if (and (redirect? (:status response)) (location response))
+       (if (and (not (false? (:follow? opts))) (redirect? (:status response)) (location response))
          (if (< hops max-redirects)
            (recur b :get (location response) nil (inc hops))
            (throw (ex-info (str "web-base testing: more than " max-redirects " redirects from " path)
                            {:path path})))
          b)))))
+
+(defn gate-refusal?
+  "Whether `response` is the gate's refusal of a request with no subject, sent to
+  `login-path`: a 303 for a navigation, a 200 with `HX-Redirect` and no `Location` for
+  an htmx swap. The refusal's own headers are part of the test, because they are what
+  tell it from a handler that redirects to the login page by itself."
+  [response login-path]
+  (let [headers (:headers response)]
+    (boolean
+     (and (every? (fn [[k v]] (= v (get headers k))) gate/refusal-headers)
+          (or (and (= 303 (:status response)) (= login-path (get headers "Location")))
+              (and (= 200 (:status response))
+                   (= login-path (get headers "HX-Redirect"))
+                   (nil? (get headers "Location"))))))))

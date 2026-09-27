@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [dev.arkaitz.web-base :as wb]
+            [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.response :as response]
@@ -284,3 +285,72 @@
           bob (-> b1 (testing/visit :post "/login-as" {:who "bob"}))]
       (is (re-find #":user \"ann\"" (:body (:response (testing/visit ann :get "/me")))) "two tabs from one value")
       (is (re-find #":user \"bob\"" (:body (:response (testing/visit bob :get "/me")))) "each with its own session"))))
+
+(deftest visit-with-follow-false-answers-the-first-response--updates-the-jar--and-only-false-turns-following-off
+  (let [{:keys [app log]} (browser-app)
+        b0 (testing/visit (testing/browser app) :get "/form")
+        n  (count @log)
+        b1 (testing/visit b0 :post "/login" nil {:follow? false})
+        r1 (:response b1)]
+    (is (= [(inc n) [:post "/login"]] [(count @log) (subvec (last @log) 0 2)]) "one request, the POST, and nothing after it")
+    (is (= [303 "/me"] [(:status r1) (get-in r1 [:headers "Location"])]) "its response is the redirect itself")
+    (is (= "/login" (:path b1)) "and the address bar is where it was sent, not where that points")
+    (is (and (string? (get (:jar b0) "ring-session")) (string? (get (:jar b1) "ring-session"))
+             (not= (get (:jar b0) "ring-session") (get (:jar b1) "ring-session")))
+        "the rotated session the unfollowed response set entered the jar")
+    (is (re-find #":user \"ann\"" (str (:body (:response (testing/visit b1 :get "/me")))))
+        "which the server recognises")
+    (let [b2 (testing/visit b1 :get "/form" nil {:follow? false})]
+      (is (and (string? (:token b2)) (not= (:token b0) (:token b2)))
+          "and a page read without following still hands the browser its new token")))
+  (let [{:keys [app log]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/r0" nil {:follow? false})]
+    (is (= [[[:get "/r0"]] 301 "/r0"] [(mapv #(subvec % 0 2) @log) (:status (:response b)) (:path b)])
+        "a chain of redirects is not entered"))
+  (let [{:keys [app log]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/r0" nil {:follow? nil})]
+    (is (= [4 "/r3?x=1"] [(count @log) (:path b)]) "control: only false turns following off — nil follows the chain")))
+
+(defn- gated-app []
+  (wb/handler {:session    {:key KEY}
+               :csrf       false
+               :login-path "/login"
+               :subject-fn #(get-in % [:headers "x-subject"])
+               :routes     [["/login" {:get (fn [_] {:status 200 :body "login page"})}]
+                            ["/priv" {:wb/gate wb/subject-present? :get (fn [_] {:status 200 :body "private"})}]
+                            ["/forbidden" {:wb/gate (constantly false) :get (fn [_] {:status 200 :body "never"})}]
+                            ["/self" {:get (fn [_] {:status 303 :headers {"Location" "/login"} :body ""})}]]}))
+
+(deftest gate-refusal?-recognises-the-real-gates-two-refusals-and-nothing-that-merely-looks-like-one
+  (let [app       (gated-app)
+        get*      (fn [path & headers] (app (reduce (fn [r [k v]] (mock/header r k v)) (mock/request :get path) (partition 2 headers))))
+        nav       (get* "/priv")
+        hx        (get* "/priv" "HX-Request" "true")
+        self      (get* "/self")
+        forbidden (get* "/forbidden" "X-Subject" "ann")
+        shape     (fn [r] [(:status r) (get-in r [:headers "Location"]) (get-in r [:headers "HX-Redirect"])])]
+    (is (= {"Vary" "HX-Request, HX-Request-Type" "Cache-Control" "no-store"} gate/refusal-headers)
+        "the refusal's headers, pinned by value so a change to them is seen here")
+    (is (= [303 "/login" nil] (shape nav)) "witness: the navigation refusal")
+    (is (true? (testing/gate-refusal? nav "/login")) "is recognised")
+    (is (= [200 nil "/login"] (shape hx)) "witness: the htmx refusal")
+    (is (true? (testing/gate-refusal? hx "/login")) "is recognised")
+    (is (and (= [303 "/login" nil] (shape self)) (nil? (get-in self [:headers "Cache-Control"])))
+        "witness: a handler's own 303 to the login page, without the refusal's headers")
+    (is (false? (testing/gate-refusal? self "/login")) "is not the gate's")
+    (is (and (= 403 (:status forbidden)) (= "no-store" (get-in forbidden [:headers "Cache-Control"])))
+        "witness: a refusal of a subject is a 403 that carries no-store too")
+    (is (false? (testing/gate-refusal? forbidden "/login")) "and is not a refusal of somebody with no subject")
+    (is (= [false false] [(testing/gate-refusal? nav "/elsewhere") (testing/gate-refusal? hx "/elsewhere")])
+        "a refusal to another login path is not this one")
+    (is (false? (testing/gate-refusal? (assoc-in hx [:headers "Location"] "/login") "/login"))
+        "an htmx refusal never carries a Location htmx would follow")
+    (is (= [false false] [(testing/gate-refusal? (update nav :headers dissoc "Vary") "/login")
+                          (testing/gate-refusal? (update nav :headers dissoc "Cache-Control") "/login")])
+        "each of the refusal's headers is required")
+    (is (= [false false] [(testing/gate-refusal? (assoc nav :status 302) "/login")
+                          (testing/gate-refusal? (assoc hx :status 303) "/login")])
+        "another status is not it, on either branch")
+    (is (= [false false] [(testing/gate-refusal? {:status 200 :headers {} :body "login page"} "/login")
+                          (testing/gate-refusal? {:status 303} "/login")])
+        "nor the login page a followed refusal lands on, nor a response with no headers")))

@@ -33,9 +33,10 @@
   (fn [request]
     (handler (assoc request :wb/subject (subject-fn request)))))
 
-(def ^:private refusal-headers
+(def refusal-headers
   "A refusal depends on the session and on the kind of request: never cached,
-  and varying on the htmx headers like every response whose shape does."
+  and varying on the htmx headers like every response whose shape does. Public for
+  `testing/gate-refusal?`, which recognises a refusal by them."
   {"Vary" htmx/vary "Cache-Control" "no-store"})
 
 (defn- refuse [request {:keys [login-path render-error]}]

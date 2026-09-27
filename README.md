@@ -77,6 +77,7 @@ What it does not do: authenticate, authorise, persist, or know your domain.
 (ns my.app
   (:require [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.response :as response]
+            [dev.arkaitz.web-base.security :as security]   ; csrf-field, in a view with a form
             [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.shell :as shell]
             [reitit.coercion.malli :as malli-coercion]))
@@ -321,6 +322,15 @@ the last page that had one, 301/302/303 followed as a GET up to ten times, and `
 — the last request's path and query string, which is the address bar. A POST with no
 token known throws instead of sending; `{:htmx? true}` sends the token as the header
 with the headers of a swap, and leaves an `HX-Redirect` for the test to read.
+`{:follow? false}` sends one request and follows nothing, for a test that asks *who*
+answered — a handler that redirects to a gated page lands on the login page exactly as
+the gate would — and the jar still takes what that response set.
+
+`(testing/gate-refusal? response login-path)` says whether a response is the gate's
+refusal of somebody with no subject: a 303 for a navigation, an `HX-Redirect` for a
+swap, each with the refusal's own `Vary` and `Cache-Control: no-store`. Those headers
+are what tell it from a handler that redirects to the login page by itself, so a host
+asserting "no private route is open" asks this rather than copying them.
 
 ### htmx
 
@@ -351,6 +361,15 @@ alive yourself, and stop the server on the way out:
 `stop` takes the handle `start` returned, not the Jetty object inside it. Passing
 the var `#'app` rather than `app` lets a REPL redefine the handler without
 restarting Jetty.
+
+**Stopping drains.** `stop` closes the connector at once and lets requests already in
+flight finish within `:stop-timeout-ms`, a `start` option — 10 000 by default, which
+fits well inside the grace Kubernetes (30 s) and systemd (90 s) give a process before
+killing it. A request arriving meanwhile on a connection that was already open is
+answered 503. One still running when the window closes is cut, and `stop` logs a WARN
+and returns rather than throwing, so the rest of a system still halts. `0` cuts at once.
+Through Integrant the option goes in `:dev.arkaitz.web-base/server`'s map beside
+`:port`.
 
 ### A native binary
 
@@ -444,7 +463,23 @@ A bad port, a missing or malformed resource, a variable nobody set, a system tha
 to start or a banner that throws is one line on stderr and exit status 1 — the failing
 key's own message, never the configuration: Integrant's own failure carries the resolved
 configuration of the key that threw, password included. Whatever had started is halted
-rather than leaked, and SIGTERM halts the running system.
+rather than leaked, and SIGTERM halts the running system; a halt that fails then is
+logged at ERROR through tools.logging rather than printed by the JVM, configuration and
+all.
+
+`wbi/init` is that start without the rest, for a host's tests or a `-main` of its own:
+`(wbi/init config)` or `(wbi/init config keys)` answers the system, and a key that throws
+halts what had started and throws an `ex-info` whose message is that key's own and
+whose data is empty.
+
+### Logging, for a library that plugs in
+
+The base logs through `clojure.tools.logging` and ships no backend; the host chooses
+one. For the length of a request the SLF4J MDC holds `request-id`, the id the response
+carries in `X-Request-Id`, so `%X{request-id}` in the host's pattern puts it on every
+line written on that request's thread. A library that plugs into a host of the base —
+auth-base does — logs through the same facade and gets the id for nothing, without
+depending on the base.
 
 ### Configuration, and not exporting secrets on every start
 

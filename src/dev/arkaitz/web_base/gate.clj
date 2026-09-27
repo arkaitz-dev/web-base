@@ -52,8 +52,10 @@
      :body    ""}))
 
 (defn middleware
-  "reitit middleware compiled per route: it vanishes from routes without
-  `:wb/gate` (absent or nil), and fails at router construction when the gate
+  "reitit middleware compiled per route, over the route's data as reitit merged it
+  from its parents — so a gate on a parent guards every child, a child's own gate
+  replaces it, and a child's nil leaves the parent's in place. It vanishes from routes
+  whose merged data has no `:wb/gate` (absent or nil), and fails at router construction when the gate
   is present but not callable — `false` would otherwise open a route without
   a symptom — or when no `:login-path` is configured, which would otherwise
   be a 500 on the first refused request. reitit hands the compile step the

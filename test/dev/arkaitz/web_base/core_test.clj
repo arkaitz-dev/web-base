@@ -84,6 +84,58 @@
   (is (= 303 (:status ((wb/handler (config :csrf false :subject-fn nil)) (mock/request :get "/priv"))))
       ":subject-fn nil — an absent setting — means no subject, not a crash"))
 
+(deftest a-gate-on-a-parent-route-refuses-every-child-and-none-of-its-siblings-outside
+  ;; The children carry no :wb/gate of their own: that is the condition under test. CSRF
+  ;; is off because a tokenless POST would be CSRF's 403 and never reach the gate.
+  (let [ran     (atom [])
+        h       (fn [tag] (fn [r] (swap! ran conj [tag (:path-params r)])
+                            {:status 200 :body (str tag " " (pr-str (:wb/subject r)))}))
+        app     (wb/handler (config :csrf false
+                                    :routes [["/login" {:post (fn [_] (session/rotate {:status 200 :body "in"} {:user "ann"}))}]
+                                             ["/pub" {:get (h :pub)}]
+                                             ["" {:wb/gate wb/subject-present?}
+                                              ["/a" {:get (h :a)}]
+                                              ["/b/:id" {:post (h :b)}]
+                                              ["/deep" ["/c" {:get (h :c)}]]
+                                              ["/own" {:wb/gate (fn [_] false) :get (h :own)}]
+                                              ["/open" {:wb/gate (constantly true) :get (h :open)}]
+                                              ["/nil" {:wb/gate nil :get (h :nil)}]]]))
+        login   (app (mock/request :post "/login"))
+        in      #(testing/with-cookies % login)
+        refusal (fn [r] [(:status r) (get-in r [:headers "Location"]) (get-in r [:headers "Cache-Control"])
+                         (get-in r [:headers "Vary"]) (:body r)])
+        denied  [303 LOGIN "no-store" "HX-Request, HX-Request-Type" ""]]
+    (is (seq (testing/cookies login)) "precondition: the login issued a session cookie")
+    (is (= denied (refusal (app (mock/request :get "/a")))) "anonymous GET of a child: the parent's gate sends it to the login")
+    (let [r (app (mock/header (mock/request :get "/a") "HX-Request" "true"))]
+      (is (= [200 LOGIN nil "no-store" "HX-Request, HX-Request-Type" ""]
+             [(:status r) (get-in r [:headers "HX-Redirect"]) (get-in r [:headers "Location"])
+              (get-in r [:headers "Cache-Control"]) (get-in r [:headers "Vary"]) (:body r)])
+          "anonymous htmx swap of a child: HX-Redirect, no Location, uncached"))
+    (is (= denied (refusal (app (mock/request :post "/b/7")))) "anonymous POST to a child with a path param: refused")
+    (is (= denied (refusal (app (mock/request :get "/deep/c")))) "a grandchild two levels down: refused")
+    (is (= denied (refusal (app (mock/request :get "/own")))) "a child with a gate of its own refuses the anonymous too")
+    ;; Replacement rather than composition is only visible through a child gate that
+    ;; admits what the parent's refuses.
+    (is (= {:status 200 :body ":open nil"} (dissoc (app (mock/request :get "/open")) :headers))
+        "a child whose own gate admits everyone replaces the parent's: the anonymous gets in")
+    (is (= denied (refusal (app (mock/request :get "/nil"))))
+        "a child's nil gate does not open it: nil leaves the parent's gate in place")
+    (is (= {:status 200 :body ":pub nil"} (dissoc (app (mock/request :get "/pub")) :headers))
+        "a sibling outside the group admits the anonymous visitor")
+    (is (= [[:open {}] [:pub {}]] @ran) "no gated child's handler ran for an anonymous request")
+    (is (= {:status 200 :body ":a \"ann\""} (dissoc (app (in (mock/request :get "/a"))) :headers))
+        "signed in, the child's handler ran with the subject")
+    (let [r (app (in (mock/header (mock/request :get "/a") "HX-Request" "true")))]
+      (is (= [200 ":a \"ann\"" nil] [(:status r) (:body r) (get-in r [:headers "HX-Redirect"])])
+          "signed in, an htmx swap of the child passes: no HX-Redirect"))
+    (is (= {:status 200 :body ":b \"ann\""} (dissoc (app (in (mock/request :post "/b/7"))) :headers)) "signed-in POST reaches the child")
+    (is (= {:status 200 :body ":c \"ann\""} (dissoc (app (in (mock/request :get "/deep/c"))) :headers)) "and the grandchild")
+    (let [r (app (in (mock/request :get "/own")))]
+      (is (= [403 (page 403 (frag 403))] [(:status r) (:body r)]) "the child's own gate replaced the parent's"))
+    (is (= [[:open {}] [:pub {}] [:a {}] [:a {}] [:b {:id "7"}] [:c {}]] @ran)
+        "the children ran only for the subject, the param reaching the handler through the inherited gate")))
+
 (deftest assembled-csrf-refuses-unsafe-without-token-and-admits-header-or-form-field
   (let [app    (wb/handler (config))
         t      (app (mock/request :get "/token"))

@@ -161,7 +161,8 @@
 (defn handler
   "Builds the Ring handler from the host's config:
 
-    :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`
+    :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
+                  inherited by nested routes (layouts concatenate, a child's gate replaces)
     :session      `{:key base64-or-bytes}` or `{:store s}` (required)
     :subject-fn   request → subject or nil (default: always nil)
     :login-path   where a refusal without a subject goes (required iff a route has :wb/gate)

@@ -46,8 +46,9 @@ schema yourself.
   `response/ok` builds it; the base renders it through the stack — the whole
   stack for a navigation, nothing for an htmx swap, or exactly the height the
   handler names with `:wb/height`.
-- **A gate that speaks htmx.** Per route, `:wb/gate` is a predicate over the
-  request. A refusal becomes a `303` for a navigation, an `HX-Redirect` for an
+- **A gate that speaks htmx.** `:wb/gate` is a predicate over the request, declared
+  on a route or on the parent of a group of them — then every route nested there is
+  gated, including one added later without a word. A refusal becomes a `303` for a navigation, an `HX-Redirect` for an
   htmx swap (never a `302` htmx would follow into its target), or a `403` when a
   subject is present.
 - **Errors as data with three renderings** — page, fragment, plain text — chosen
@@ -103,8 +104,8 @@ What it does not do: authenticate, authorise, persist, or know your domain.
    {:routes     [["" {:wb/layouts [my-shell]}
                   ["/" {:get home}]
                   ["/login" {:post login}]
-                  ["/private" {:wb/gate wb/subject-present?
-                               :get private}]]]
+                  ["" {:wb/gate wb/subject-present?}   ; every route below is private
+                   ["/private" {:get private}]]]]
     :coercion   malli-coercion/coercion
     :subject-fn #(get-in % [:session :subject])
     :login-path "/login"
@@ -118,6 +119,12 @@ What it does not do: authenticate, authorise, persist, or know your domain.
 
 A method's value is the handler itself or a map with `:handler` and reitit's
 `:parameters`.
+
+Gate the group, not each route: a private route added under the gated parent is
+private without anyone remembering to say so. Public routes, a login included, go
+outside it. A child's own `:wb/gate` replaces the parent's, and a child's `nil` does
+not open it — reitit's merge keeps the parent's — so a page that must be public moves
+out of the group.
 
 ### Sessions
 

@@ -639,6 +639,15 @@ this base's product.
   only because they have no session to act on: a route that changes anything a session
   owns does not belong there. A path the router also matches is refused at construction,
   so no route — a gated one above all — can be opened by naming it here.
+- **An error boundary outside the session** (2026-09-27). Until then the error handling
+  lived inside the router, so a session store whose database was down — or a subject
+  function that threw — escaped as a raw exception at the adapter (measured in db-base's
+  hosts: a `/health` that computed a 503 nobody saw). The same renderer now wraps
+  everything from the session inward, once: a failure there is the base's 500, logged,
+  its message never echoed, rendered with the base's own page — never the host's error
+  layout, which is written for a request that went through session, i18n and subject,
+  and which would have nothing left to catch it if it threw — and without a negotiated
+  locale, because i18n is inside. `:sessionless` routes use the same page.
 - **Behind a proxy**, opt-in: scheme and client address from `X-Forwarded-Proto` and
   `X-Forwarded-For`, only when the host says the proxy is trusted.
 

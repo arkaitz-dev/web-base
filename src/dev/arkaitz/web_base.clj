@@ -6,7 +6,8 @@
   The wiring convention IS the product, so here it is, outermost first:
 
     request-id → security headers → proxy (opt-in)
-    → [/wb/ assets → sessionless routes → host static → ] session → params → i18n → csrf → subject
+    → [/wb/ assets → sessionless routes → host static → ] error boundary → session → params
+    → i18n → csrf → subject
     → ring-handler
         router, per matched route: error → gate → render → coercion → handler
         default handler: 404 / 405 / nil-handler 500
@@ -187,6 +188,11 @@
   (let [subject-fn   (or subject-fn (constantly nil))
         csrf?        (not (false? csrf))
         render-error (error/renderer {:error-layout error-layout})
+        ;; Outside the session, i18n and subject layers the host's error layout would
+        ;; be handed a request it was never written for — no translations, no session —
+        ;; and a layout that throws there has nothing left to catch it (and must not be
+        ;; asked to render its own failure). The base's own page asks for nothing.
+        bare-error   (error/renderer {})
         router       (ring/router routes
                                   {:data (cond-> {:middleware [(error/middleware render-error)
                                                                (gate/middleware {:login-path   login-path
@@ -201,7 +207,12 @@
         (cond-> i18n (i18n/wrap i18n))
         params/wrap-params
         (session/wrap (:session config))
-        (->> (with-assets static (sessionless-handler sessionless render-error)))
+        ;; The outer error boundary: what throws in the session store, params, i18n,
+        ;; csrf or the subject function — a database that is down, above all — is the
+        ;; base's rendered 500, not a raw exception at the adapter. Outside i18n, so it
+        ;; renders without a negotiated locale.
+        ((:wrap (error/middleware bare-error)))
+        (->> (with-assets static (sessionless-handler sessionless bare-error)))
         (cond-> (:proxy? security) security/wrap-proxy)
         (security/wrap-headers security)
         log/wrap-request-id)))

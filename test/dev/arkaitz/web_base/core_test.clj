@@ -318,3 +318,58 @@
                 (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
         label))
   (is (fn? (wb/handler (config :sessionless nil))) "control: nil is the absent option"))
+
+(defn- store-that-throws
+  "A session store whose `method` throws with a secret in the message — what a pool
+  that is down looks like from the session layer."
+  [method]
+  (reify ring.middleware.session.store/SessionStore
+    (read-session [_ _] (if (= :read method) (throw (java.sql.SQLException. "pool closed: jdbc:SECRET-URL")) {:user "ann"}))
+    (write-session [_ k _] (if (= :write method) (throw (java.sql.SQLException. "pool closed: jdbc:SECRET-URL")) (or k "fresh")))
+    (delete-session [_ _] nil)))
+
+(deftest a-session-store-that-throws-is-the-bases-500-and-never-the-adapters
+  (let [app    (wb/handler (config :session {:store (store-that-throws :read)}))
+        cookie #(mock/header % "Cookie" "ring-session=old")]
+    (lt/with-log
+      (let [r (app (cookie (mock/request :get "/me")))]
+        (is (= [500 (page 500 (frag 500))] [(:status r) (:body r)]) "a navigation gets the base's 500 page")
+        (is (= (error-headers r) (select-keys (:headers r) (keys (error-headers r))))
+            "with the outer layers' headers: request id, security, no-store")
+        (is (= 1 (count (filter #(= :error (:level %)) (lt/the-log)))) "logged once, as an unhandled exception")))
+    (is (= [500 (frag 500)] ((juxt :status :body) (app (-> (mock/request :get "/me") cookie (mock/header "HX-Request" "true")))))
+        "an htmx swap gets the fragment")
+    (let [r (app (-> (mock/request :get "/me") cookie (mock/header "Accept" "text/plain")))]
+      (is (= [500 "500"] [(:status r) (:body r)]) "and text gets text")
+      (is (not (clojure.string/includes? (pr-str r) "SECRET")) "nothing of the exception reaches the response"))
+    (is (= 200 (:status (app (mock/request :get "/wb/wb.css")))) "control: assets never touch the session and still answer")))
+
+(deftest a-session-that-cannot-be-written-and-a-subject-fn-that-throws-are-the-bases-500-too
+  (let [writing (wb/handler (config :session {:store (store-that-throws :write)}))
+        r       (writing (-> (mock/request :get "/token") (mock/header "Accept" "text/plain")))]
+    (is (= [500 "500"] [(:status r) (:body r)]) "a write that fails on the way out"))
+  (let [subject (wb/handler (config :subject-fn (fn [_] (throw (ex-info "SECRET subject failure" {})))))
+        r       (subject (-> (mock/request :get "/me") (mock/header "Accept" "text/plain")))]
+    (is (= [500 "500"] [(:status r) (:body r)]) "a subject function that throws")
+    (is (not (clojure.string/includes? (str (:body r)) "SECRET"))))
+  (is (= 200 (:status ((wb/handler (config)) (mock/request :get "/me")))) "control: a healthy stack answers as before"))
+
+(deftest the-outer-boundary-renders-the-bases-own-page-never-the-hosts-layout
+  ;; The host's error layout is written for a request that went through session, i18n
+  ;; and subject; outside them it would throw — here, translating its title — and a
+  ;; layout that throws there has nothing left to catch it.
+  (let [translating (fn [{:keys [content request]}] [:main [:h1 ((:wb/tr request) [:hi])] content])
+        throwing    (fn [_] (throw (IllegalStateException. "layout bug")))]
+    (doseq [[label layout] [["a layout that translates" translating] ["a layout that always throws" throwing]]]
+      (let [app (wb/handler (config :session {:store (store-that-throws :read)}
+                                    :i18n {:dict {:en {:hi "Hello"}} :default-locale :en}
+                                    :error-layout layout))
+            r   (try (app (-> (mock/request :get "/me") (mock/header "Cookie" "ring-session=old")))
+                     (catch Throwable t {:escaped (.getName (class t))}))]
+        (is (= [500 (page 500 (frag 500))] [(:status r) (:body r)])
+            (str label ": the base's own 500 page, not an exception at the adapter: " (pr-str (:escaped r))))))
+    (let [app (wb/handler (config :error-layout throwing
+                                  :sessionless {"/sl" (fn [_] (throw (ex-info "sessionless failure" {})))}))
+          r   (try (app (mock/request :get "/sl")) (catch Throwable t {:escaped (.getName (class t))}))]
+      (is (= [500 (page 500 (frag 500))] [(:status r) (:body r)])
+          (str "a sessionless route that throws gets the same page: " (pr-str (:escaped r)))))))

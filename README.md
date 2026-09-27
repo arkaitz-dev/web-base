@@ -191,9 +191,17 @@ Every malformed or missing required value fails at construction, naming the key.
 It is the product, so it is written down, outermost first:
 
 ```
-request-id → security headers → proxy (opt-in) → [assets, sessionless] → session → params
-→ i18n → csrf → subject → router: error → gate → render → coercion → handler
+request-id → security headers → proxy (opt-in) → [assets, sessionless] → error boundary
+→ session → params → i18n → csrf → subject → router: error → gate → render → coercion → handler
 ```
+
+The outer error boundary exists for what throws before the router — a session store
+whose database is down, above all, or a subject function that fails: that is the base's
+500 page (fragment, text), logged once, never the exception at the adapter. It is the
+base's own page, never your `:error-layout`: out there the request has no session,
+translations or subject for a layout to read, and a layout that threw would have nothing
+left to catch it. No negotiated language either, since i18n is inside. `:sessionless`
+routes that throw get the same page, for the same reason.
 
 A route may add its own `:middleware` in route data; reitit merges it
 **innermost**, inside the base's four, so it wraps the handler only. It sees

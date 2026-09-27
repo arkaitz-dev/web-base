@@ -25,3 +25,8 @@
 
 (defmethod ig/init-key :test.run/marker [_ path] path)
 (defmethod ig/halt-key! :test.run/marker [_ path] (spit path "halted"))
+
+;; Halted before :test.run/bad-halter, which it refers to: the marker says the hook ran
+;; `ig/halt!`, and the halt then fails on the key after it.
+(defmethod ig/init-key :test.run/marker-after [_ {:keys [path]}] path)
+(defmethod ig/halt-key! :test.run/marker-after [_ path] (spit path "halted"))

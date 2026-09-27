@@ -15,6 +15,7 @@
   two-argument form takes readers of the host's own."
   (:refer-clojure :exclude [read-string run!])
   (:require [clojure.java.io :as io]
+            [clojure.tools.logging :as log]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.config :as config]
             [integrant.core :as ig]))
@@ -88,23 +89,34 @@
   [^Throwable t]
   (message-of (or (ex-cause t) t)))
 
-(defn- start
-  "`[:ok system]`, or `[:error message]` with whatever had started halted — `ig/init`
-  leaves a partial system behind when a key throws, and nobody else holds it.
+(defn init
+  "`ig/init` for a host's system, `ks` as Integrant takes them. When a key throws, what
+  had started is halted — `ig/init` leaves a partial system behind and nobody else holds
+  it — and the failure is rethrown as an `ex-info` carrying a message and no data.
 
   The message is the failing key's own exception, just under Integrant's wrapper: never
   Integrant's data, which carries the whole resolved configuration of that key, and not
   the innermost cause either, which is a driver's and says whatever the driver says."
+  ([config] (init config (keys config)))
+  ([config ks]
+   (try
+     (ig/init config ks)
+     (catch clojure.lang.ExceptionInfo e
+       (let [partial (:system (ex-data e))
+             halted  (when partial
+                       (try (ig/halt! partial) nil
+                            (catch Throwable t
+                              (str "; halting what had started also failed: " (key-failure t)))))]
+         (throw (ex-info (str "failed to start: " (key-failure e) halted) {})))))))
+
+(defn- start
+  "`[:ok system]`, or `[:error message]` — `init` for `run!`, which reports a failure as
+  one line rather than a stack trace."
   [config]
   (try
-    [:ok (ig/init config)]
+    [:ok (init config)]
     (catch clojure.lang.ExceptionInfo e
-      (let [partial (:system (ex-data e))
-            halted  (when partial
-                      (try (ig/halt! partial) nil
-                           (catch Throwable t
-                             (str "; halting what had started also failed: " (key-failure t)))))]
-        [:error (str "failed to start: " (key-failure e) halted)]))))
+      [:error (ex-message e)])))
 
 (defn run!
   "The whole of a host's `-main`: reads `config` (a classpath resource), with the readers
@@ -139,5 +151,11 @@
                (catch Throwable t
                  (ig/halt! system)
                  (fail! (str "the banner failed: " (message-of t))))))
-        (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable #(ig/halt! system)))
+        ;; Logged rather than left to the JVM's uncaught handler, which writes a bare trace
+        ;; to stderr past whatever backend the host configured.
+        (.addShutdownHook (Runtime/getRuntime)
+                          (Thread. ^Runnable #(try (ig/halt! system)
+                                                   (catch Throwable t
+                                                     (log/error (or (ex-cause t) t)
+                                                                "halting the system on shutdown failed")))))
         @(promise)))))

@@ -1,0 +1,4 @@
+;; Fixture for the subprocess test of a shutdown hook whose halt fails.
+{:test.run/bad-halter   {}
+ :test.run/marker-after {:path  #wb/env "WB_TEST_MARKER"
+                         :after #ig/ref :test.run/bad-halter}}

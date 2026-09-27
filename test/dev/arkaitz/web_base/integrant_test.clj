@@ -3,6 +3,7 @@
   runs in a finally: a hang is never a result."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
+            [clojure.tools.logging.test :as lt]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.config :as config]
             [dev.arkaitz.web-base.integrant :as wbi]
@@ -64,6 +65,39 @@
         (finally
           (ig/halt! sys))))))
 
+(deftest a-window-that-runs-out-while-halting-does-not-abort-the-halt-of-the-rest
+  ;; ::wb/server refers to :test.run/first, so Integrant halts first AFTER the server:
+  ;; a server stop that threw when its window ran out would leave it running.
+  (reset! keys/halted [])
+  (let [entered (promise) release (promise)
+        sys     (ig/init {:test.run/first {}
+                          ::wb/handler    {:routes  [["/park" {:post (fn [_] (deliver entered true) @release
+                                                                      {:status 200 :body "never seen"})}]]
+                                           :session {:key "AAAAAAAAAAAAAAAAAAAAAA=="}
+                                           :csrf    false}
+                          ::wb/server     {:handler         (ig/ref ::wb/handler)
+                                           :port            0
+                                           :stop-timeout-ms 500
+                                           :after           (ig/ref :test.run/first)}})
+        server  (:server (::wb/server sys))
+        port    (:port (::wb/server sys))]
+    (try
+      (is (= 500 (.getStopTimeout ^Server server)) "the window given in the system's configuration reaches the server")
+      (let [parked (future (try (.send client (-> (HttpRequest/newBuilder (URI. (str "http://127.0.0.1:" port "/park")))
+                                                  (.timeout (Duration/ofSeconds 10))
+                                                  (.POST (java.net.http.HttpRequest$BodyPublishers/noBody)) (.build))
+                                       (HttpResponse$BodyHandlers/ofString))
+                                (catch Throwable t t)))]
+        (is (true? (deref entered 5000 ::timeout)) "precondition: a request is in flight past the window")
+        (lt/with-log
+          (is (= ::halted (deref (future (try (ig/halt! sys) ::halted (catch Throwable t t))) 30000 ::timeout))
+              "halt! completed without throwing although the window ran out")
+          (is (= [:first-started] @keys/halted) "and the key halted after the server was halted too")
+          (is (lt/logged? 'dev.arkaitz.web-base.server :warn #"stop window closed") "the cut was logged"))
+        (is (instance? java.io.IOException (deref parked 10000 ::timeout)) "the request was cut"))
+      (finally
+        (deliver release true)))))
+
 (deftest server-without-a-port-is-refused-rather-than-taking-80
   (is (= ["server options need a non-negative integer :port (0 for an ephemeral one)" {:config-key [:port] :value nil}]
          (try (wb/start identity {}) (catch ExceptionInfo e [(ex-message e) (ex-data e)])))))
@@ -120,14 +154,50 @@
          (system-config {:config "run-env-config.edn"} []))
       "without the file named, the variable nobody set is not found — no file is looked for on the host's behalf — and it is a sentence, not a stack trace"))
 
-(deftest a-system-that-fails-to-start-is-halted-and-reported-without-its-configuration
+(defn- init-failure
+  "What `wbi/init` threw for the fixture `resource`: `[message data cause]`, the whole
+  throwable as data, or ::returned."
+  [resource]
+  (let [e (try (wbi/init (wbi/read-string (slurp (clojure.java.io/resource resource)))) ::returned
+               (catch ExceptionInfo e e))]
+    (if (= ::returned e)
+      e
+      {:triple [(ex-message e) (ex-data e) (ex-cause e)] :whole (pr-str (Throwable->map e))})))
+
+(deftest init-returns-the-system-integrant-built--and-with-ks-only-that-subset-and-its-dependencies
   (reset! halted [])
-  (let [config (wbi/read-string (slurp (clojure.java.io/resource "run-failing-config.edn")))
-        [outcome message] (start config)]
-    (is (= [:error "failed to start: the database refused the login"] [outcome message])
-        "the cause's message, and only that")
-    (is (not (str/includes? message "S3CRET")) "never the configuration Integrant attaches to its own failure")
-    (is (= [:first-started] @halted) "and the key that had started was halted, not leaked")))
+  (let [config {:test.run/first {} :test.run/port 3000 :test.run/fallback {:dep (ig/ref :test.run/first)}}
+        whole  (wbi/init config)
+        subset (wbi/init config [:test.run/fallback])]
+    (is (= {:test.run/first :first-started :test.run/port 3000 :test.run/fallback {:dep :first-started}} whole)
+        "the system Integrant built, its ref resolved — not the configuration handed in")
+    (is (= {:test.run/first :first-started :test.run/fallback {:dep :first-started}} subset)
+        "with keys, only those and what they refer to")
+    (ig/halt! subset)
+    (is (= [:first-started] @halted) "and what init returned is a system halt! can stop")))
+
+(deftest init-on-a-failing-key-throws-its-own-message-with-no-data-and-no-cause--halting-what-had-started
+  (reset! halted [])
+  (let [failing (init-failure "run-failing-config.edn")]
+    (is (= ["failed to start: the database refused the login" {} nil] (:triple failing))
+        "the failing key's own message, and neither Integrant's data nor a cause")
+    (is (= [:first-started] @halted) "the key that had started was halted, not leaked")
+    (is (not (str/includes? (:whole failing) "S3CRET")) "the configuration's secret is nowhere in the throwable"))
+  (let [wrapping (init-failure "run-wrapping-config.edn")]
+    (is (= ["failed to start: db-base: the database refused the login" {} nil] (:triple wrapping))
+        "the key's own sentence, one link under Integrant's wrapper — not the driver's beneath it")
+    (is (not (str/includes? (:whole wrapping) "S3CRET")) "whose words carry the secret"))
+  (is (= ["failed to start: java.lang.NullPointerException" {} nil] (:triple (init-failure "run-silent-config.edn")))
+      "an exception with no message is named by its class")
+  (let [bad-halt (init-failure "run-bad-halt-config.edn")]
+    (is (= [(str "failed to start: the database refused the login;"
+                 " halting what had started also failed: could not close the pool") {} nil]
+           (:triple bad-halt))
+        "a partial system that cannot be halted says so, instead of escaping as a second exception")
+    (is (not (str/includes? (:whole bad-halt) "S3CRET"))))
+  (let [config (wbi/read-string (slurp (clojure.java.io/resource "run-failing-config.edn")))]
+    (is (= [:error "failed to start: the database refused the login"] (start config))
+        "run!'s reading of it is init's message, one line")))
 
 (deftest a-malformed-config-or-port-path-is-a-sentence-not-a-stack-trace
   (let [[outcome message] (system-config {:config "malformed-edn.txt"} [])]
@@ -137,27 +207,18 @@
   (is (= [:error ":port-path must be a vector of keys, not :test.run/port"]
          (system-config {:config "run-config.edn" :port-path :test.run/port} ["4567"]))))
 
-(deftest a-failure-names-the-keys-own-message-never-its-driver-cause-or-nothing
-  (let [read #(wbi/read-string (slurp (clojure.java.io/resource %)))]
-    (let [[_ message] (start (read "run-wrapping-config.edn"))]
-      (is (= "failed to start: db-base: the database refused the login" message)
-          "the failing key's own sentence, one link under Integrant's wrapper")
-      (is (not (str/includes? message "S3CRET")) "not the driver's cause beneath it"))
-    (is (= [:error "failed to start: java.lang.NullPointerException"] (start (read "run-silent-config.edn")))
-        "an exception with no message is named by its class, not by an empty line")
-    (is (= [:error (str "failed to start: the database refused the login;"
-                        " halting what had started also failed: could not close the pool")]
-           (start (read "run-bad-halt-config.edn")))
-        "a partial system that cannot be halted says so, instead of escaping as a second exception")))
-
 (defn- java-process
-  "`main` in a JVM of its own, on this test's classpath, with `env` added."
-  [main env]
-  (let [pb (ProcessBuilder. ^java.util.List [(str (System/getProperty "java.home") "/bin/java")
-                                             "-cp" (System/getProperty "java.class.path")
-                                             "clojure.main" "-m" main])]
-    (.putAll (.environment pb) env)
-    (.start pb)))
+  "`main` in a JVM of its own, on this test's classpath, with `env` added — its stderr
+  into `err-file` when one is given, for what the process writes while it is being
+  destroyed, which a pipe the parent closes on destroy would lose."
+  ([main env] (java-process main env nil))
+  ([main env err-file]
+   (let [pb (ProcessBuilder. ^java.util.List [(str (System/getProperty "java.home") "/bin/java")
+                                              "-cp" (System/getProperty "java.class.path")
+                                              "clojure.main" "-m" main])]
+     (.putAll (.environment pb) env)
+     (when err-file (.redirectError pb ^java.io.File err-file))
+     (.start pb))))
 
 (deftest run-exits-1-with-one-line-on-stderr-when-the-system-fails-to-start
   (let [p (java-process "web-base-test.run-failing" {})]
@@ -180,6 +241,26 @@
     (.destroy p)
     (is (.waitFor p 60 java.util.concurrent.TimeUnit/SECONDS) "SIGTERM ends it")
     (is (= "halted" (slurp marker)) "and the shutdown hook halted the system on the way")))
+
+(deftest a-halt-that-fails-on-shutdown-is-logged-through-the-hosts-backend--never-a-bare-trace-on-stderr
+  (let [tmp    #(.toFile (java.nio.file.Files/createTempFile "web-base-run-" %
+                                                             (make-array java.nio.file.attribute.FileAttribute 0)))
+        marker (tmp ".marker")
+        logged (tmp ".log")
+        errors (tmp ".err")
+        p      (java-process "web-base-test.run-bad-halt-shutdown" {"WB_TEST_MARKER" (str marker) "WB_TEST_LOG" (str logged)}
+                             errors)
+        reader (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream p)))
+        banner (deref (future (.readLine reader)) 120000 ::no-banner)]
+    (is (= "up" banner) "precondition: the system started")
+    (.destroy p)
+    (is (.waitFor p 60 java.util.concurrent.TimeUnit/SECONDS) "SIGTERM ends it")
+    (is (= "halted" (slurp marker)) "precondition: the hook ran the halt, which then failed on the next key")
+    (is (= [["dev.arkaitz.web-base.integrant" :error "could not close the pool" "halting the system on shutdown failed"]]
+           (mapv read-string (remove str/blank? (str/split-lines (slurp logged)))))
+        "the failure went once through tools.logging, at ERROR, with the key's own exception")
+    (is (= "" (slurp errors))
+        "and nothing reached stderr — the JVM's handler would have printed Integrant's exception, configuration and all")))
 
 (deftest a-banner-that-throws-halts-the-system-and-exits-1
   (let [marker (.toFile (java.nio.file.Files/createTempFile "web-base-run-" ".marker"

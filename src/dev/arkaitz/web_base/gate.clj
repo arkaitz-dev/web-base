@@ -19,7 +19,16 @@
 
 (defn wrap-subject
   "Puts `(subject-fn request)` on every request as `:wb/subject`, gated route
-  or not — a public page's layout also paints the identity corner."
+  or not — a public page's layout also paints the identity corner.
+
+  Eager on purpose (decided 2026-09-27 by a five-lens panel, measured): with
+  auth-base the call is one indexed read of the revocation generation per signed-in
+  request, 9.7 µs on SQLite, after the session read the store already made; it is
+  wasted only on responses that paint no identity, and it is where revocation takes
+  effect. A lazy value was rejected — a `delay` is truthy, so `subject-present?` would
+  admit anyone — and so were a per-route opt-out (the default 404 has no route) and a
+  cached generation (revocation within N seconds instead of at the next request). A
+  route that needs no subject at all belongs in `:sessionless`."
   [handler subject-fn]
   (fn [request]
     (handler (assoc request :wb/subject (subject-fn request)))))

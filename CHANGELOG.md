@@ -5,7 +5,7 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
-## 0.9.0 — unreleased
+## 0.9.0 — 2026-09-29
 
 - **Breaking:** every request runs on a virtual thread of its own. With platform
   threads, once as many connections waited on a database pool as there were threads —

@@ -41,11 +41,11 @@
 (deftest the-gate-speaks-htmx-and-the-demo-s-own-login-satisfies-it
   (let [app (app)]
     (let [r (get* app "/private")]
-      (is (testing/gate-refusal? r "/login")
-          (str "a navigation to the private page goes to the login — got status " (:status r)
+      (is (and (= 303 (:status r)) (testing/gate-refusal? r "/login"))
+          (str "a navigation to the private page goes to the login by a 303 — got status " (:status r)
                ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
     (let [r (get* app "/private" "HX-Request" "true")]
-      (is (testing/gate-refusal? r "/login")
+      (is (and (= 200 (:status r)) (testing/gate-refusal? r "/login"))
           (str "an htmx request gets HX-Redirect and never a Location — got status " (:status r)
                ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
     (let [form    (get* app "/login")

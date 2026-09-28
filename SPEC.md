@@ -308,6 +308,12 @@ By that measure ours are not alike:
 **Shallow — the consumer never writes them:**
 
 - **Jetty** lives entirely behind the base. The consumer never sees it.
+  Amended for 0.9.0, 2026-09-28, decided with the user — a breaking change: every
+  request runs on a virtual thread. On ring-jetty-adapter's 50 platform threads, a host
+  whose requests waited on a full connection pool stopped answering new connections
+  altogether (measured, 4 to 27 s at 48 to 200 connections), silently; on virtual
+  threads the pool is the limit and an overload is its logged timeout.
+  `:virtual-threads? false` restores platform threads.
 - **Hiccup** — a view returns **plain Clojure vectors and maps**. Nobody requires hiccup
   to write one; only the renderer touches it, inside the base. **The contract is data.**
 - **Reitit** — routes are **plain data**. Reitit-shaped, but still vectors and maps.

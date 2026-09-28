@@ -452,6 +452,25 @@ and returns rather than throwing, so the rest of a system still halts. `0` cuts 
 Through Integrant the option goes in `:dev.arkaitz.web-base/server`'s map beside
 `:port`.
 
+**Every request runs on a virtual thread** (since 0.9.0, a breaking change). A request
+waiting for a database connection parks instead of holding a thread. On platform threads
+it held one: once as many connections waited on the pool as there were threads — 50 by
+default — a new connection was not answered at all until the load dropped, and a
+balancer's health probe timed out on an instance that was merely busy (measured with a
+pool of four on PostgreSQL: 4 to 27 s at 48 to 200 connections; on virtual threads,
+milliseconds at 1000). The limit is now where it belongs, the connection pool, and an
+overload arrives as its timeout — a logged 500 for the page, a 503 from `ready?` in a
+health check — never as silence; size the pool and its `:timeout-ms` for that.
+ring-jetty-adapter's pool options still apply (`:max-threads` bounds Jetty's own
+platform threads, which accept and select), `:virtual-threads? false` restores platform
+threads, and a `:thread-pool` of your own is used as given; `:max-queued-requests` still
+bounds what waits, though it now counts Jetty's own jobs rather than parked requests, so
+the number admitted differs. A request still running when `stop`'s window closes is
+interrupted, as on platform threads. It needs JDK 21 or later — on an older JVM `start`
+refuses, naming `:virtual-threads?` — and on JDK 21 to 23 a virtual thread blocked inside
+`synchronized` code pins the carrier it runs on, of which there is one per core: a driver
+that blocks that way brings the freeze back with fewer threads. JDK 24 removed that.
+
 ### A native binary
 
 A web-base application compiles to a GraalVM native image. Measured on one

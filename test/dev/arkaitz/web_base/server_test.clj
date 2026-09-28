@@ -1,7 +1,8 @@
 (ns dev.arkaitz.web-base.server-test
   "One real Jetty, on port 0, through the assembled handler. Every request has
   a timeout and the server is stopped in a finally: a hang is never a result."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [clojure.tools.logging.test :as lt]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.server :as server]
@@ -16,7 +17,8 @@
            [java.time Duration]
            [org.eclipse.jetty.server Server ServerConnector]
            [org.eclipse.jetty.server.handler GracefulHandler]
-           [org.eclipse.jetty.util.component LifeCycle]))
+           [org.eclipse.jetty.util.component LifeCycle]
+           [org.eclipse.jetty.util.thread QueuedThreadPool]))
 
 (def ^:private KEY "AAECAwQFBgcICQoLDA0ODw==")
 (def ^:private id-pattern #"[A-Za-z0-9_-]{16}")
@@ -92,13 +94,19 @@
 ;; idempotent GET against the port that has just closed; a new connection may still be
 ;; answered for some tens of milliseconds after stop begins, so refusal is polled for,
 ;; each attempt a fresh client and a fresh TCP connect; and stop's duration is no witness
-;; of waiting, because stopping the thread pool under a parked handler takes ~2.5 s with
-;; no window at all. The only derived bound on it is the upper one: less than the default
+;; of waiting, because stopping a platform thread pool under a parked handler takes
+;; ~2.5 s with no window at all (virtual threads, the default since 0.9.0, stop in ms). The only derived bound on it is the upper one: less than the default
 ;; window, when a shorter one was asked for.
 
+(defn- until
+  "Polls `pred` every 10 ms; answers whether it held within `ms` — a hang guard."
+  [ms pred]
+  (let [end (+ (System/currentTimeMillis) ms)]
+    (loop [] (cond (pred) true (> (System/currentTimeMillis) end) false :else (do (Thread/sleep 10) (recur))))))
+
 (defn- parking-app
-  "`/park` blocks until `release` is delivered, recording how it ended in `trace`; the
-  thread pool stopping under it interrupts it."
+  "`/park` blocks until `release` is delivered, recording how it ended in `trace`; a
+  stop whose window closes interrupts it."
   [entered release trace]
   (fn [{:keys [uri]}]
     (if (= uri "/park")
@@ -192,7 +200,7 @@
             {:in-force in-force :parked parked :stopped stopped :elapsed elapsed
              :response (deref response 10000 ::timeout)
              :log (mapv (juxt :level (comp str :logger-ns) :throwable :message) (lt/the-log))
-             :server (:server handle) :port port})))
+             :server (:server handle) :port port :trace trace})))
       (finally
         (deliver release true)
         (server/stop handle)))))
@@ -231,7 +239,7 @@
           (server/stop handle))))))
 
 (deftest a-request-that-outlives-the-window-is-cut-stop-returns-nil-and-warns-once
-  (let [{:keys [in-force parked stopped elapsed response log server port]} (outliving-the-window 1000)]
+  (let [{:keys [in-force parked stopped elapsed response log server port trace]} (outliving-the-window 1000)]
     (is (= 1000 in-force) "the window asked for is the one in force")
     (is (true? parked) "precondition: a request was in flight")
     (is (nil? stopped) (str "stop swallowed the window running out and returned nil, got " (pr-str stopped)))
@@ -243,13 +251,15 @@
         "exactly one WARN says so")
     (is (not (.isRunning ^Server server)) "the server is down")
     (is (.isStopped ^LifeCycle (.getThreadPool ^Server server)) "its threads are gone")
+    (is (until 5000 #(= [[:handler :interrupted]] @trace))
+        (str "and the handler was interrupted, not left running after stop returned: " (pr-str @trace)))
     (is (= :refused (fresh-get port)) "and its port refuses")))
 
 (deftest stop-timeout-ms-zero-does-not-wait-for-a-parked-request-and-warns-nothing
-  ;; "At once" is not a number: stopping the pool under a parked handler takes ~2.5 s.
+  ;; "At once" is not a number: stopping a platform pool under a parked handler takes ~2.5 s.
   ;; A missing setStopTimeout is also a window of 0, so this row cannot catch it; the
   ;; two tests above do.
-  (let [{:keys [in-force parked stopped elapsed response log server port]} (outliving-the-window 0)]
+  (let [{:keys [in-force parked stopped elapsed response log server port trace]} (outliving-the-window 0)]
     (is (= 0 in-force) "a window of 0 is in force")
     (is (true? parked) "precondition: a request was in flight")
     (is (nil? stopped) (str "stop returned nil, got " (pr-str stopped)))
@@ -257,6 +267,8 @@
     (is (cut? response) (str "the parked request was cut, got " (pr-str response)))
     (is (= [] log) "no window, so nothing ran out and nothing is logged")
     (is (.isStopped ^Server server) "the server is stopped")
+    (is (until 5000 #(= [[:handler :interrupted]] @trace))
+        (str "and the handler was interrupted, not left running after stop returned: " (pr-str @trace)))
     (is (= :refused (fresh-get port)) "and its port refuses")))
 
 (deftest stop-timeout-ms-outside-0-to-max-int-is-refused-naming-the-key-before-anything-opens
@@ -301,3 +313,144 @@
     (is (thrown-with-msg? IllegalStateException #"^boom$" (server/stop {:server s}))
         "only the window running out is swallowed")
     (is (not (.isRunning s)))))
+
+;; --- the threads a request runs on ------------------------------------------------
+
+(defn- who-app [{:keys [uri]}]
+  (if (= uri "/who")
+    {:status 200 :body (pr-str [(.isVirtual (Thread/currentThread)) (.getName (Thread/currentThread))])}
+    {:status 404 :body ""}))
+
+(defn- who-answers
+  "Sixteen concurrent GETs of /who: contention is where a platform thread could slip in."
+  [port]
+  (mapv #(read-string (:body (deref % 10000 {:body "[:timeout nil]"})))
+        (doall (repeatedly 16 #(future (http port "GET" "/who"))))))
+
+(defn- with-server [options f]
+  (let [handle (server/start who-app (assoc options :port 0))]
+    (try (f handle (.getThreadPool ^Server (:server handle)))
+         (finally (server/stop handle)))))
+
+(deftest the-handler-runs-on-a-virtual-thread-by-default--false-restores-platform-threads-and-a-host-pool-is-used-as-given
+  (with-server {}
+    (fn [{:keys [port]} pool]
+      (let [answers (who-answers port)]
+        (is (= {true 16} (frequencies (map first answers))) (str "by default every request ran on a virtual thread, got " (frequencies answers)))
+        (is (some? (.getVirtualThreadsExecutor ^QueuedThreadPool pool)) "on a pool with a virtual-thread executor"))))
+  (with-server {:virtual-threads? false}
+    (fn [{:keys [port]} pool]
+      (is (= {false 16} (frequencies (map first (who-answers port)))) ":virtual-threads? false runs on ring's platform threads")
+      (is (nil? (.getVirtualThreadsExecutor ^QueuedThreadPool pool)) "on a pool without the executor")))
+  (let [host (doto (QueuedThreadPool. 20) (.setName "host-qtp"))]
+    (with-server {:thread-pool host}
+      (fn [{:keys [port]} pool]
+        (let [answers (who-answers port)]
+          (is (identical? host pool) ":thread-pool is used as given: the server's pool is the host's object")
+          (is (= {false 16} (frequencies (map first answers))) "on its platform threads")
+          (is (every? #(str/starts-with? (second %) "host-qtp-") answers) (str "the host's, by name: " (mapv second answers)))))))
+  (let [host (QueuedThreadPool. 20)]
+    (with-server {:thread-pool host :virtual-threads? false}
+      (fn [_ pool] (is (identical? host pool) "false beside a host pool is accepted, and the host's pool stands"))))
+  ;; A host pool with a virtual executor of the host's: stop must leave that executor
+  ;; alone, or a host sharing it — Jetty's JVM-wide default, say — loses it everywhere.
+  (let [executor (org.eclipse.jetty.util.VirtualThreads/getNamedVirtualThreadsExecutor "host-vt-")
+        host     (doto (QueuedThreadPool. 20) (.setVirtualThreadsExecutor executor))]
+    (with-server {:thread-pool host} (fn [_ pool] (is (identical? host pool))))
+    (is (not (.isShutdown ^java.util.concurrent.ExecutorService executor)) "stop left the host's executor running")
+    (let [ran (promise)]
+      (.execute ^java.util.concurrent.Executor executor #(deliver ran true))
+      (is (true? (deref ran 5000 ::timeout)) "and it still runs a task"))))
+
+(defn- park-more-than-threads
+  "32 POSTs parked in the handler of a server with 8 threads, each on a connection of its
+  own, and a probe on a new connection. Answers what the test observes."
+  [options]
+  (let [entered (atom 0)
+        release (promise)
+        trace   (atom [])
+        app     (fn [{:keys [uri]}]
+                  (if (= uri "/park")
+                    (do (swap! entered inc) @release {:status 200 :body "done"})
+                    {:status 200 :body "fast"}))
+        handle  (server/start app (merge {:port 0 :max-threads 8 :min-threads 8 :acceptor-threads 1 :selector-threads 1} options))
+        port    (:port handle)
+        pool    (.getThreadPool ^Server (:server handle))
+        conn    ^ServerConnector (first (.getConnectors ^Server (:server handle)))
+        parked  (doall (for [_ (range 32)]
+                         (future (let [c (-> (HttpClient/newBuilder) (.version HttpClient$Version/HTTP_1_1) (.build))]
+                                   (try (let [r (.send c (-> (HttpRequest/newBuilder (URI. (str "http://127.0.0.1:" port "/park")))
+                                                             (.timeout (Duration/ofSeconds 20))
+                                                             (.POST (HttpRequest$BodyPublishers/noBody)) (.build))
+                                                       (HttpResponse$BodyHandlers/ofString))]
+                                          [(.statusCode r) (.body r)])
+                                        (catch Throwable t t))))))]
+    {:entered entered :release release :trace trace :handle handle :port port :pool pool :parked parked
+     :capacity (- (.getMaxThreads ^QueuedThreadPool pool) (.getAcceptors conn) (.getSelectorCount (.getSelectorManager conn)))}))
+
+(deftest with-more-requests-parked-than-threads-a-new-connection-is-answered-before-they-are-released--and-not-on-platform-threads
+  ;; A request parked in the handler stands in for one waiting on a full database pool.
+  ;; The pass criterion is ORDER: the probe answered while the 32 are still parked. The
+  ;; 5 and 10 s derefs are hang guards; the control's 1000 ms is declared policy — the
+  ;; virtual probe answers in about 3 ms (measured 2026-09-28), 300 times inside it.
+  (let [{:keys [entered release trace handle port parked]} (park-more-than-threads {})]
+    (try
+      (is (until 5000 #(= 32 @entered))
+          (str "witness: 32 requests parked at once on 8 threads — the pool's threads are not what they hold; entered=" @entered))
+      (let [probe (future (let [r (fresh-get port)] (swap! trace conj :probe-answered) r))]
+        (is (= [200 "fast"] (deref probe 5000 ::timeout)) "a new connection is answered while 32 requests are parked")
+        (is (not (realized? release)) "witness: before anything was released"))
+      (deliver release true)
+      (swap! trace conj :released)
+      (is (= [:probe-answered :released] @trace) "in that order")
+      (is (every? #(= [200 "done"] %) (map #(deref % 10000 ::timeout) parked)) "and every parked request finished")
+      (finally (deliver release true) (server/stop handle))))
+  (let [{:keys [entered release trace handle port pool parked capacity]} (park-more-than-threads {:virtual-threads? false})]
+    (try
+      (is (= 6 capacity) "control: the platform pool keeps max − acceptors − selectors = 6 threads for handlers")
+      (is (until 5000 #(= capacity @entered)) (str "control: " capacity " requests entered, entered=" @entered))
+      (Thread/sleep 200)
+      (is (= capacity @entered) "control: and no more — the rest wait for a thread, which is the freeze")
+      (is (.isLowOnThreads ^QueuedThreadPool pool) "control: the pool says so")
+      (let [probe (future (let [r (fresh-get port)] (swap! trace conj :probe-answered) r))]
+        (is (= ::pending (deref probe 1000 ::pending))
+            "control: on platform threads the same probe is NOT answered while the threads are held — the harness can tell")
+        (swap! trace conj :released)
+        (deliver release true)
+        (is (= [200 "fast"] (deref probe 10000 ::timeout)) "control: it is answered once they are released")
+        (is (= [:released :probe-answered] @trace) "control: only then"))
+      (is (every? #(= [200 "done"] %) (map #(deref % 10000 ::timeout) parked)) "control: and every parked request finished")
+      (is (= 32 @entered))
+      (finally (deliver release true) (server/stop handle)))))
+
+(deftest virtual-threads-outside-true-false-and-true-beside-a-host-pool-are-refused-naming-the-key-before-jetty-is-reached
+  ;; A JVM without virtual threads is refused too; VirtualThreads/areSupported is static
+  ;; and no test here can make this JVM lack them, so that branch is read, not run.
+  (let [calls (atom 0)]
+    (with-redefs [jetty/run-jetty (fn [& _] (swap! calls inc) (throw (IllegalStateException. "never reached")))]
+      (doseq [bad ["true" 1 :true]]
+        (is (= {:config-key [:virtual-threads?] :value bad}
+               (try (server/start app {:port 0 :virtual-threads? bad}) ::started (catch ExceptionInfo e (ex-data e))))
+            (str (pr-str bad) " is refused naming [:virtual-threads?]")))
+      (let [e (try (server/start app {:port 0 :virtual-threads? true :thread-pool (QueuedThreadPool. 4)}) nil
+                   (catch ExceptionInfo e e))]
+        (is (= {:config-key [:virtual-threads?]} (ex-data e)) "true beside a host pool is refused, the pool kept out of the data")
+        (is (re-find #":thread-pool" (str (ex-message e))) "saying why")))
+    (is (= 0 @calls) "refused before Jetty was reached"))
+  (let [handle (server/start app {:port 0 :virtual-threads? nil})]
+    (try (is (instance? Server (:server handle)) "nil is the absent option") (finally (server/stop handle)))))
+
+(deftest ring-jetty-adapters-pool-options-reach-the-virtual-pool
+  (let [read-pool (fn [^QueuedThreadPool p]
+                    ;; getQueue is protected: read through reflection, in the test only.
+                    (let [q ^org.eclipse.jetty.util.BlockingArrayQueue
+                          (.invoke (doto (.getDeclaredMethod QueuedThreadPool "getQueue" (make-array Class 0)) (.setAccessible true))
+                                   p (object-array 0))]
+                      [(.getMaxThreads p) (.getMinThreads p) (.getIdleTimeout p) (.isDaemon p)
+                       (some? (.getVirtualThreadsExecutor p)) (.getCapacity q) (.getMaxCapacity q)]))]
+    (with-server {:max-threads 12 :min-threads 9 :thread-idle-timeout 1234 :daemon? true :max-queued-requests 77}
+      (fn [_ pool] (is (= [12 9 1234 true true 9 77] (read-pool pool))
+                       "[max min idle daemon virtual queue-capacity queue-max] are the host's options")))
+    (with-server {}
+      (fn [_ pool] (is (= [50 8 60000 false true 8 Integer/MAX_VALUE] (read-pool pool))
+                       "and ring-jetty-adapter's defaults without them")))))

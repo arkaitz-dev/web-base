@@ -132,6 +132,17 @@
   and DELETE, which move the form into the query string and send no body."
   #{:get :delete})
 
+(defn- with-params
+  "`path` with `params` in its query when `method` carries them there: a browser form's
+  GET replaces the action's query with its fields, as HTML says; htmx's DELETE adds them
+  to the URL it was given. Anything else is left alone — its params go in the body."
+  [method path params]
+  (if (and (params-in-query? method) (seq params))
+    (let [[uri qs] (split-path path)
+          query    (if (and (= :delete method) qs) (str qs "&" (form-body params)) (form-body params))]
+      (str uri "?" query))
+    path))
+
 (def ^:private htmx-only?
   "The methods only htmx sends: a browser form knows GET and POST."
   #{:put :patch :delete})
@@ -139,9 +150,6 @@
 (defn- request-of
   [{:keys [jar token]} method path params {:keys [htmx? remote-addr]}]
   (let [[uri qs] (split-path path)
-        qs       (if (and (params-in-query? method) (seq params))
-                   (str/join "&" (remove str/blank? [qs (form-body params)]))
-                   qs)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
         body     (when (and (unsafe? method) (not (params-in-query? method)))
                    (form-body (cond-> (vec params)
@@ -210,7 +218,7 @@
      (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
                           " with no CSRF token — GET a page that carries one first")
                      {:path path})))
-   (loop [b b method method path path params params hops 0]
+   (loop [b b method method path (with-params method path params) params params hops 0]
      (let [response ((:handler b) (request-of b method path params opts))
            b        (assoc b
                            :response response

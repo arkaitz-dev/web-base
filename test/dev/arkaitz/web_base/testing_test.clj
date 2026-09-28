@@ -358,6 +358,20 @@
                           (testing/gate-refusal? {:status 303} "/login")])
         "nor the login page a followed refusal lands on, nor a response with no headers")))
 
+(deftest a-get-carries-its-params-as-the-query-a-browser-form-would-send
+  (let [{:keys [app log]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/r3" {"x" "1" "y" "a b"})]
+    (is (= [[:get "/r3"]] (mapv #(subvec % 0 2) @log)) "witness: one GET, to the path")
+    (is (= ["qs:x=1&y=a+b" "/r3?x=1&y=a+b"] [(:body (:response b)) (:path b)])
+        "the params arrive as the query, and the address bar shows them"))
+  (let [{:keys [app]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/r3?old=1" {"x" "1"})]
+    (is (= ["qs:x=1" "/r3?x=1"] [(:body (:response b)) (:path b)])
+        "a form's fields replace the action's own query, as HTML says"))
+  (let [{:keys [app]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/r3?kept=1")]
+    (is (= "qs:kept=1" (:body (:response b))) "control: no params leaves the path's query alone")))
+
 (deftest put-patch-and-delete-carry-the-token-exactly-as-a-post-does
   (let [{:keys [app log]} (browser-app)
         b (testing/visit (testing/browser app) :get "/form")]
@@ -372,6 +386,11 @@
                      :hdr (:token b) :addr "127.0.0.1" :method method}]
                [(:status r) (edn/read-string (:body r))])
             (str method " under htmx sends the token as the header and its params where htmx puts them")))
+      (when (= :delete method)
+        (let [b' (testing/visit b :delete "/echo?kept=1" {:x "1"} {:htmx? true})]
+          (is (= [{"kept" "1" "x" "1"} "/echo?kept=1&x=1"]
+                 [(:query (edn/read-string (:body (:response b')))) (:path b')])
+              "a DELETE adds its params to the URL it was given, and the address bar shows what was sent")))
       (reset! log [])
       (let [e (try (testing/visit b method "/echo" {:x "1"}) nil
                    (catch clojure.lang.ExceptionInfo e e))

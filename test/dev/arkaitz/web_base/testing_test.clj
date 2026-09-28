@@ -375,7 +375,7 @@
       (reset! log [])
       (let [e (try (testing/visit (testing/browser app) method "/echo" {:x "1"}) nil
                    (catch clojure.lang.ExceptionInfo e e))]
-        (is (= [(str "web-base testing: a " ({:put "PUT" :patch "PATCH" :delete "DELETE"} method) " to /echo with no CSRF token"
+        (is (= [(str "web-base: a " ({:put "PUT" :patch "PATCH" :delete "DELETE"} method) " to /echo with no CSRF token"
                      " — GET a page that carries one first")
                 {:path "/echo"}]
                [(ex-message e) (ex-data e)])

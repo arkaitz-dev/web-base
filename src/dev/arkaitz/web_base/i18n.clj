@@ -73,7 +73,7 @@
   (when locale-fn
     (let [chosen (locale-fn request)]
       (when-not (or (nil? chosen) (and (sequential? chosen) (every? some? chosen)))
-        (throw (ex-info ":locale-fn must return nil or a sequence of locales"
+        (throw (ex-info "web-base: i18n :locale-fn must return nil or a sequence of locales"
                         {:config-key [:i18n :locale-fn] :value chosen})))
       chosen)))
 
@@ -87,15 +87,15 @@
 
 (defn- check-config! [{:keys [dict default-locale locale-fn]}]
   (when-not (and (map? dict) (seq dict))
-    (throw (ex-info "i18n config needs :dict, a Tempura dictionary keyed by locale"
+    (throw (ex-info "web-base: i18n config needs :dict, a Tempura dictionary keyed by locale"
                     {:config-key [:i18n :dict]})))
   (when-not (contains? dict default-locale)
-    (throw (ex-info "i18n :default-locale must be one of the dictionary's locales"
+    (throw (ex-info "web-base: i18n :default-locale must be one of the dictionary's locales"
                     {:config-key [:i18n :default-locale]
                      :value      default-locale
                      :locales    (vec (keys dict))})))
   (when (and (some? locale-fn) (not (ifn? locale-fn)))
-    (throw (ex-info "i18n :locale-fn must be a function of the request"
+    (throw (ex-info "web-base: i18n :locale-fn must be a function of the request"
                     {:config-key [:i18n :locale-fn] :value locale-fn}))))
 
 (defn- translator

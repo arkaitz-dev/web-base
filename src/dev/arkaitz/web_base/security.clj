@@ -37,22 +37,22 @@
 
 (defn- hsts-value [hsts]
   (when-not (map? hsts)
-    (throw (ex-info "security :hsts must be a map with :max-age"
+    (throw (ex-info "web-base: security :hsts must be a map with :max-age"
                     {:config-key [:security :hsts] :value hsts})))
   (let [{:keys [max-age include-subdomains?]} hsts]
     (when-not (nat-int? max-age)
-      (throw (ex-info "security :hsts needs a non-negative integer :max-age"
+      (throw (ex-info "web-base: security :hsts needs a non-negative integer :max-age"
                       {:config-key [:security :hsts :max-age] :value max-age})))
     (str "max-age=" max-age (when include-subdomains? "; includeSubDomains"))))
 
 (defn- check-frame-options! [frame-options]
   (when-not (or (nil? frame-options) (false? frame-options) (string? frame-options))
-    (throw (ex-info "security :frame-options must be a string, false to omit it, or absent"
+    (throw (ex-info "web-base: security :frame-options must be a string, false to omit it, or absent"
                     {:config-key [:security :frame-options] :value frame-options}))))
 
 (defn- check-csp! [csp]
   (when-not (or (nil? csp) (and (string? csp) (not (str/blank? csp))))
-    (throw (ex-info "security :csp must be a non-blank policy string, or absent"
+    (throw (ex-info "web-base: security :csp must be a non-blank policy string, or absent"
                     {:config-key [:security :csp] :value csp}))))
 
 (defn- static-headers [{:keys [frame-options hsts csp]}]

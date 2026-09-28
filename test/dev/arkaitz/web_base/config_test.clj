@@ -23,23 +23,23 @@
     (is (= {:home home} (config/read-string "{:home #wb/env \"HOME\"}")) "a present variable yields its value")
     (is (= {:home home :n 1} (config/read-resource "probe-config.edn")) "through a classpath resource")
     (is (= {:home home :n 1} (config/read-file (io/file (io/resource "probe-config.edn")))) "through a file")
-    (is (= ["environment variable WB_SURELY_UNSET_XYZ is not set" {:env "WB_SURELY_UNSET_XYZ"}]
+    (is (= ["web-base: environment variable WB_SURELY_UNSET_XYZ is not set" {:env "WB_SURELY_UNSET_XYZ"}]
            (attempt #(config/read-string "{:x #wb/env \"WB_SURELY_UNSET_XYZ\"}")))
         "a missing variable is named — no default, ever")
-    (is (= ["#wb/env takes the variable name as a string" {:given 'HOME}]
+    (is (= ["web-base: #wb/env takes the variable name as a string" {:given 'HOME}]
            (attempt #(config/read-string "{:x #wb/env HOME}")))
         "a symbol is refused")
     (is (= {:home home} (edn/read-string {:readers config/readers} "{:home #wb/env \"HOME\"}"))
         "readers is public: a host reading its EDN with clojure.edn merges the same tag in")))
 
 (deftest missing-resource-and-file-are-named-not-a-nil-slurp--and-so-is-edn-that-does-not-parse
-  (is (= ["config resource nope/none.edn not found on the classpath" {:resource "nope/none.edn"}]
+  (is (= ["web-base: config resource nope/none.edn not found on the classpath" {:resource "nope/none.edn"}]
          (attempt #(config/read-resource "nope/none.edn"))))
-  (is (= ["config file /nope/none.edn not found" {:file "/nope/none.edn"}]
+  (is (= ["web-base: config file /nope/none.edn not found" {:file "/nope/none.edn"}]
          (attempt #(config/read-file "/nope/none.edn"))))
   ;; A file the operator writes by hand: a brace missing is the likely
   ;; failure, and the reader's own message names nothing.
-  (is (= ["config test/resources/malformed-edn.txt is not valid EDN: EOF while reading string"
+  (is (= ["web-base: config test/resources/malformed-edn.txt is not valid EDN: EOF while reading string"
           {:source "test/resources/malformed-edn.txt"}]
          (attempt #(config/read-file "test/resources/malformed-edn.txt")))
       "the reader's refusal is named after the file")
@@ -116,7 +116,7 @@
   (lt/with-log
     (is (= "" (#'config/resolved "" {"X" "from-the-file"} "src" "X")) "the rule, at the point it is applied")
     (is (= [] (entries)) "and nothing is logged, because the file was never consulted"))
-  (is (= ["environment variable X is not set" {:env "X"}]
+  (is (= ["web-base: environment variable X is not set" {:env "X"}]
          (attempt #(#'config/resolved nil {} "src" "X")))
       "in neither: named, never a nil"))
 
@@ -124,10 +124,10 @@
   (is (.isFile fallback-file) "precondition: the fixture is on the test classpath")
   (lt/with-log
     (let [rs (config/env-file-readers fallback-file)]
-      (is (= ["environment variable WB_SURELY_UNSET_XYZ is not set" {:env "WB_SURELY_UNSET_XYZ"}]
+      (is (= ["web-base: environment variable WB_SURELY_UNSET_XYZ is not set" {:env "WB_SURELY_UNSET_XYZ"}]
              (attempt #(config/read-string rs "{:x #wb/env \"WB_SURELY_UNSET_XYZ\"}")))
           "a name in neither the environment nor the file is named — still no default, ever")
-      (is (= ["#wb/env takes the variable name as a string" {:given 'HOME}]
+      (is (= ["web-base: #wb/env takes the variable name as a string" {:given 'HOME}]
              (attempt #(config/read-string rs "{:x #wb/env HOME}")))
           "a symbol is refused through the fallback readers too")
       (is (= [] (entries)) "neither refusal logs: there was no fallback hit"))))
@@ -146,24 +146,24 @@
         "a directory is not a file to read: still config/readers, never an error")))
 
 (deftest a-malformed-variables-map-is-refused-when-the-readers-are-built--naming-the-source
-  (is (= ["variables from probe must be a map of name to value" {:source "probe" :given [1 2]}]
+  (is (= ["web-base: variables from probe must be a map of name to value" {:source "probe" :given [1 2]}]
          (attempt #(config/env-readers [1 2] "probe")))
       "not a map: refused when the readers are built, not on the first tag")
-  (is (= ["variable name from probe is not a string" {:source "probe" :name :HOME}]
+  (is (= ["web-base: variable name from probe is not a string" {:source "probe" :name :HOME}]
          (attempt #(config/env-readers {:HOME "x"} "probe")))
       "a name that is not a string")
-  (is (= ["value of HOME from probe is not a string" {:source "probe" :name "HOME" :value 1}]
+  (is (= ["web-base: value of HOME from probe is not a string" {:source "probe" :name "HOME" :value 1}]
          (attempt #(config/env-readers {"HOME" 1} "probe")))
       "a value that is not a string")
   ;; Every entry, not only the first: a good pair before a bad one is the
   ;; shape a real file has.
-  (is (= ["value of SECOND from probe is not a string" {:source "probe" :name "SECOND" :value 2}]
+  (is (= ["web-base: value of SECOND from probe is not a string" {:source "probe" :name "SECOND" :value 2}]
          (attempt #(config/env-readers (array-map "FIRST" "fine" "SECOND" 2) "probe")))
       "a bad entry after a good one is still refused")
-  (is (= ["variable name from probe is not a string" {:source "probe" :name :second}]
+  (is (= ["web-base: variable name from probe is not a string" {:source "probe" :name :second}]
          (attempt #(config/env-readers (array-map "FIRST" "fine" :second "x") "probe")))
       "and so is a bad name after a good one")
-  (is (= ["variables from the variables passed in must be a map of name to value"
+  (is (= ["web-base: variables from the variables passed in must be a map of name to value"
           {:source "the variables passed in" :given nil}]
          (attempt #(config/env-readers nil)))
       "the one-argument form names its default source")

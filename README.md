@@ -119,7 +119,9 @@ What it does not do: authenticate, authorise, persist, or know your domain.
 ```
 
 A method's value is the handler itself or a map with `:handler` and reitit's
-`:parameters`.
+`:parameters`. Without a coercion a path parameter is reitit's, a string under
+`:path-params` — `/things/:id` answers `{:id "7"}`; with one, `(:parameters request)`
+holds it typed.
 
 Gate the group, not each route: a private route added under the gated parent is
 private without anyone remembering to say so. Public routes, a login included, go
@@ -192,7 +194,8 @@ on demand.
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
 | `:sessionless` | `{"/health" handler}`: exact paths, any method, answered before the session — no session read or written, no CSRF, no locale, no subject; the request id and security headers still apply. A handler may be a var; a path one of `:routes` also matches is refused |
 
-Every malformed or missing required value fails at construction, naming the key.
+Every malformed or missing required value fails at construction, naming the key, and
+every refusal the base throws says `web-base:` first, so a host's log names who refused.
 
 Unknown keys at the top level are yours — the base ignores them. **Inside the maps the
 base owns they are refused** (since 0.8.0, a breaking change): `:session`, `:security`
@@ -241,7 +244,9 @@ base's four as well, silently. Three things a host may want there:
 `(response/ok body)` is `{:status 200 :body body}`; `(response/ok body {:slots m
 :height n})` adds `:wb/slots` and `:wb/height`. `(response/see-other path)` is
 the 303 after a classic form. A 404 or 403 the handler decides is
-`(error/throw! {:status 404})`: it reaches the error renderer, not the layouts.
+`(error/throw! {:status 404})`: it reaches the error renderer, not the layouts. A thing
+that exists but is not the subject's is a 404 too — "not yours" answered as "not found",
+so an id tried at random says nothing about what exists.
 
 `:wb/height` is rarely written. A navigation renders the whole stack and an htmx
 swap renders none of it; name a height only for the case in between — a tab
@@ -352,6 +357,10 @@ header with the headers of a swap, and leaves an `HX-Redirect` for the test to r
 answered — a handler that redirects to a gated page lands on the login page exactly as
 the gate would — and the jar still takes what that response set.
 
+Hiccup 2 escapes `'` as `&apos;`, never as `&#39;`, so a negative assertion on a
+rendered body — `(not (str/includes? body "&#39;"))` — is vacuous: it passes whatever
+the page says. Assert on the spelling the renderer produces.
+
 `(testing/gate-refusal? response login-path)` says whether a response is the gate's
 refusal of somebody with no subject: a 303 for a navigation, an `HX-Redirect` for a
 swap, each with the refusal's own `Vary` and `Cache-Control: no-store`. Those headers
@@ -365,6 +374,11 @@ The base's htmx coupling lives in three named places: the request classifier
 renderer. htmx 4 swaps every response, 4xx and 5xx included, so an error inside
 a swap lands inside its target. `hx-on`, `hx-vals js:` and trigger filters need
 `unsafe-eval`; under a strict CSP, do without them — the demo does.
+
+Target the element the server answers with, by its id, and swap its outer HTML: a form
+whose answer is `[:form#thing …]` wants `hx-target="#thing" hx-swap="outerHTML"`. Aimed
+at a parent, or swapping the inner HTML, the answer lands inside what it was meant to
+replace, and the page nests a form in a form.
 
 ### Lifecycle
 
@@ -480,10 +494,15 @@ name, starts the system, prints your banner, halts on shutdown and blocks.
 (defn -main [& args]
   (wbi/run! {:config    "config.edn"
              :env-file  "env.local.edn"
-             :port-path [:my/port]
+             :port-path [:dev.arkaitz.web-base/server :port]
              :banner    #(str "serving on " (get-in % [:dev.arkaitz.web-base/server :port]))}
             args))
 ```
+
+`:port-path` is where in the configuration the port given on the command line goes —
+here straight into the server's own map, beside the `:port` it replaces. A key of its own
+(`:my/port`, referred to with `#ig/ref`) is needed only when two components read the
+port, and it then needs an `init-key` that returns its value.
 
 A bad port, a missing or malformed resource, a variable nobody set, a system that fails
 to start or a banner that throws is one line on stderr and exit status 1 — the failing

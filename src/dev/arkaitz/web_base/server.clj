@@ -38,13 +38,13 @@
   [handler {:keys [port configurator stop-timeout-ms] :as options}]
   ;; Jetty would silently take port 80 without one.
   (when-not (nat-int? port)
-    (throw (ex-info "server options need a non-negative integer :port (0 for an ephemeral one)"
+    (throw (ex-info "web-base: server options need a non-negative integer :port (0 for an ephemeral one)"
                     {:config-key [:port] :value port})))
   ;; An explicit nil is a setting that was absent where the map was assembled, as the
   ;; handler's :csrf reads it: the policy, never a refusal.
   (let [window (if (nil? stop-timeout-ms) default-stop-timeout-ms stop-timeout-ms)]
     (when-not (and (nat-int? window) (<= window Integer/MAX_VALUE))
-      (throw (ex-info "server option :stop-timeout-ms must be an integer from 0 to 2147483647 (milliseconds)"
+      (throw (ex-info "web-base: server option :stop-timeout-ms must be an integer from 0 to 2147483647 (milliseconds)"
                       {:config-key [:stop-timeout-ms] :value window})))
     (let [server (jetty/run-jetty handler (-> options
                                               (dissoc :stop-timeout-ms)

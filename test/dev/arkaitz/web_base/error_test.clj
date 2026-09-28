@@ -119,7 +119,7 @@
 
 (deftest throw!-datum-round-trips-through-the-middleware-with-title-and-detail
   (let [datum {:status 403 :title "T" :detail "D"}]
-    (is (= ["web-base error 403" (assoc datum :type :dev.arkaitz.web-base.error/error)]
+    (is (= ["web-base: error 403" (assoc datum :type :dev.arkaitz.web-base.error/error)]
            (try (error/throw! datum)
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         "throw! carries the datum and :type")
@@ -136,11 +136,11 @@
 
 (deftest a-datum-without-an-integer-status-fails-loudly
   (doseq [datum [{:title "T"} {:status "404"} {:status 404.0}]]
-    (is (= ["error datum has no integer :status" {:datum datum}]
+    (is (= ["web-base: error datum has no integer :status" {:datum datum}]
            (try (error/throw! datum)
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str "throw! refuses " (pr-str datum)))
-    (is (= ["error datum has no integer :status" {:datum datum}]
+    (is (= ["web-base: error datum has no integer :status" {:datum datum}]
            (try (render-error datum page-req)
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str "renderer refuses " (pr-str datum)))))

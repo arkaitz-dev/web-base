@@ -66,10 +66,10 @@
    :compile (fn [{:wb/keys [gate]} _router-opts]
               (when (some? gate)
                 (when-not (ifn? gate)
-                  (throw (ex-info "a route declares :wb/gate that is not callable"
+                  (throw (ex-info "web-base: a route declares :wb/gate that is not callable"
                                   {:config-key [:wb/gate] :value gate})))
                 (when (str/blank? login-path)
-                  (throw (ex-info "a route declares :wb/gate but no :login-path is configured"
+                  (throw (ex-info "web-base: a route declares :wb/gate but no :login-path is configured"
                                   {:config-key [:login-path]})))
                 (fn [handler]
                   (fn [request]

@@ -46,13 +46,13 @@
 
 (deftest missing-key-throws-ex-info-naming-session-key--never-a-random-key
   (doseq [config [{} {:key nil} {:key nil :cookie-attrs {:secure false}}]]
-    (is (= ["session config needs :store or :key; the base never generates a key"
+    (is (= ["web-base: session config needs :store or :key; the base never generates a key"
             {:config-key [:session :key]}]
            (attempt config))
         (str "no store and no key → named failure, for " (pr-str config)))))
 
 (deftest malformed-key-throws-ex-info-with-shape-only--the-key-value-never-appears
-  (let [message "session :key must be a byte array or a base64 string of exactly 16 bytes"
+  (let [message "web-base: session :key must be a byte array or a base64 string of exactly 16 bytes"
         bytes   (type (byte-array 0))]
     (doseq [[key given decoded] [[(byte-array 15)             bytes                 15]
                                  [(byte-array 17)             bytes                 17]
@@ -77,7 +77,7 @@
 
 (deftest store-and-key-together-are-refused-as-ambiguous
   (doseq [key ["AAAAAAAAAAAAAAAAAAAAAA==" (byte-array 16)]]
-    (is (= ["session config takes :store or :key, not both" {:config-key [:session]}]
+    (is (= ["web-base: session config takes :store or :key, not both" {:config-key [:session]}]
            (attempt {:store (memory/memory-store) :key key}))
         (str "refused with a key given as " (if (string? key) "base64" "bytes"))))
   (let [store (memory/memory-store)]
@@ -86,15 +86,15 @@
 
 (deftest same-site-is-validated-at-construction-not-at-the-first-response
   (doseq [value ["Lax" :Lax "lax" 1 nil]]
-    (is (= ["session :cookie-attrs :same-site must be :strict, :lax or :none"
+    (is (= ["web-base: session :cookie-attrs :same-site must be :strict, :lax or :none"
             {:config-key [:session :cookie-attrs :same-site] :value value}]
            (attempt {:store (memory/memory-store) :cookie-attrs {:same-site value}}))
         (str "refused at construction: " (pr-str value))))
-  (is (= ["session :cookie-attrs :same-site :none requires :secure true"
+  (is (= ["web-base: session :cookie-attrs :same-site :none requires :secure true"
           {:config-key [:session :cookie-attrs :secure] :value false}]
          (attempt {:store (memory/memory-store) :cookie-attrs {:same-site :none :secure false}}))
       "SameSite=None without Secure is a cookie browsers drop silently: refused")
-  (is (= ["session config needs :store or :key; the base never generates a key"
+  (is (= ["web-base: session config needs :store or :key; the base never generates a key"
           {:config-key [:session :key]}]
          (try (session/wrap identity {}) (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
       "wrap itself fails at construction, not on the first request")
@@ -153,7 +153,7 @@
          (meta (:session (session/rotate {:status 200} (with-meta {:user "a"} {:x 1})))))
       "the session's own metadata survives")
   (doseq [bad [nil "abc" 42 [1]]]
-    (is (= ["rotate needs the new session as a map; nil would delete the session" {:session bad}]
+    (is (= ["web-base: rotate needs the new session as a map; nil would delete the session" {:session bad}]
            (try (session/rotate {:status 200} bad)
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str "refused: " (pr-str bad)))))

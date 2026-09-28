@@ -137,7 +137,7 @@
   (let [attempt (fn [request height stack]
                   (try (render/response request (assoc hiccup-ok :wb/height height) stack)
                        (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
-        msg     "response :wb/height is not within the route's layout stack"]
+        msg     "web-base: response :wb/height is not within the route's layout stack"]
     (is (= [msg {:wb/height 3 :layouts 2}] (attempt page-req 3 stack)) ":wb/height 3 beyond a 2-layout stack throws")
     (is (= [msg {:wb/height -1 :layouts 2}] (attempt page-req -1 stack)) "negative height throws")
     (is (= [msg {:wb/height 1.5 :layouts 2}] (attempt page-req 1.5 stack)) "fractional height throws")

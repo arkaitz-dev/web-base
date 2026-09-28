@@ -99,7 +99,7 @@
         (deliver release true)))))
 
 (deftest server-without-a-port-is-refused-rather-than-taking-80
-  (is (= ["server options need a non-negative integer :port (0 for an ephemeral one)" {:config-key [:port] :value nil}]
+  (is (= ["web-base: server options need a non-negative integer :port (0 for an ephemeral one)" {:config-key [:port] :value nil}]
          (try (wb/start identity {}) (catch ExceptionInfo e [(ex-message e) (ex-data e)])))))
 
 (deftest read-string-reads-ig-ref-and-wb-env-in-the-same-edn
@@ -108,7 +108,7 @@
     (let [m (wbi/read-string "{:a #ig/ref :x/b :h #wb/env \"PATH\"}")]
       (is (= {:a (ig/ref :x/b) :h path} m))
       (is (ig/ref? (:a m))))
-    (is (= ["environment variable WB_SURELY_UNSET_123 is not set" {:env "WB_SURELY_UNSET_123"}]
+    (is (= ["web-base: environment variable WB_SURELY_UNSET_123 is not set" {:env "WB_SURELY_UNSET_123"}]
            (try (wbi/read-string "#wb/env \"WB_SURELY_UNSET_123\"") (catch ExceptionInfo e [(ex-message e) (ex-data e)]))))
     (is (thrown-with-msg? RuntimeException #"No reader function for tag wb/env" (ig/read-string "#wb/env \"PATH\""))
         "control: integrant alone does not know the tag — the merge is what adds it")))
@@ -150,7 +150,7 @@
   (is (= "from-the-file"
          (:test.run/fallback (second (system-config {:config "run-env-config.edn"
                                                      :env-file "test/resources/env-fallback.edn"} [])))))
-  (is (= [:error "environment variable WB_TEST_FALLBACK is not set"]
+  (is (= [:error "web-base: environment variable WB_TEST_FALLBACK is not set"]
          (system-config {:config "run-env-config.edn"} []))
       "without the file named, the variable nobody set is not found — no file is looked for on the host's behalf — and it is a sentence, not a stack trace"))
 

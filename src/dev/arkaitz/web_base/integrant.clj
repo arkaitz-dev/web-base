@@ -142,7 +142,7 @@
     (defn -main [& args]
       (wbi/run! {:config    \"config.edn\"
                  :env-file  \"env.local.edn\"
-                 :port-path [:my/port]
+                 :port-path [::wb/server :port]
                  :banner    #(str \"serving on \" (get-in % [::wb/server :port]))}
                 args))
 

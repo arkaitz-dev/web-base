@@ -130,14 +130,14 @@
                 (try (ring/router routes {:data {:middleware [(gate/middleware opts)]}})
                      ::constructed
                      (catch ExceptionInfo e [(ex-message e) (dissoc (ex-data e) :reitit.exception/cause)])))]
-    (is (= ["a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
+    (is (= ["web-base: a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
            (build [["/priv" {:wb/gate gate/subject-present? :get hi}]] {:render-error render-error}))
         "a gated route with no :login-path throws at router construction")
-    (is (= ["a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
+    (is (= ["web-base: a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
            (build [["/priv" {:wb/gate gate/subject-present? :get hi}]] {:login-path "" :render-error render-error}))
         "a blank :login-path counts as missing")
     (doseq [bad [false "yes" 42]]
-      (is (= ["a route declares :wb/gate that is not callable" {:config-key [:wb/gate] :value bad}]
+      (is (= ["web-base: a route declares :wb/gate that is not callable" {:config-key [:wb/gate] :value bad}]
              (build [["/priv" {:wb/gate bad :get hi}]] gate-opts))
           (str ":wb/gate " (pr-str bad) " is refused rather than opening the route")))
     (is (= ::constructed (build [["/priv" {:wb/gate :wb/subject :get hi}]] gate-opts))

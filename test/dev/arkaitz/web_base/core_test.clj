@@ -58,11 +58,11 @@
 (deftest handler-requires-routes-and-session-naming-the-missing-key
   (let [attempt (fn [cfg] (try (wb/handler cfg) ::built
                                (catch ExceptionInfo e [(ex-message e) (dissoc (ex-data e) :reitit.exception/cause)])))]
-    (is (= ["web-base config needs :routes" {:config-key [:routes]}] (attempt {:session {:key KEY}})))
-    (is (= ["web-base config needs :routes" {:config-key [:routes]}] (attempt {:routes nil :session {:key KEY}})) "nil counts as missing")
-    (is (= ["web-base config needs :session" {:config-key [:session]}] (attempt {:routes []})))
+    (is (= ["web-base: config needs :routes" {:config-key [:routes]}] (attempt {:session {:key KEY}})))
+    (is (= ["web-base: config needs :routes" {:config-key [:routes]}] (attempt {:routes nil :session {:key KEY}})) "nil counts as missing")
+    (is (= ["web-base: config needs :session" {:config-key [:session]}] (attempt {:routes []})))
     (is (fn? (wb/handler {:routes [] :session {:key KEY} :whatever-unknown 1})) "unknown keys are the host's business")
-    (is (= ["a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
+    (is (= ["web-base: a route declares :wb/gate but no :login-path is configured" {:config-key [:login-path]}]
            (attempt {:routes [["/p" {:wb/gate wb/subject-present? :get identity}]] :session {:key KEY}}))
         "a collaborator's construction-time check is reached")))
 
@@ -382,7 +382,7 @@
           (str "a nil answer is logged at error, as the docstring says: " (mapv :message (lt/the-log)))))))
 
 (deftest a-sessionless-path-the-router-also-matches-is-refused-at-construction
-  (is (= ["web-base config :sessionless path /priv is also one of :routes; it would be served without the route's gate, session or CSRF"
+  (is (= ["web-base: config :sessionless path /priv is also one of :routes; it would be served without the route's gate, session or CSRF"
           {:config-key [:sessionless "/priv"]}]
          (try (wb/handler (config :sessionless {"/health" identity "/priv" identity})) nil
               (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
@@ -395,7 +395,7 @@
                        ["a path without a leading slash" {"health" identity}]
                        ["a path under the base's /wb/" {"/wb/health" identity}]
                        ["a handler that is not a function" {"/health" "ok"}]]]
-    (is (= ["web-base config :sessionless must be a map of path to handler, each path starting with / and none under /wb/, which is the base's"
+    (is (= ["web-base: config :sessionless must be a map of path to handler, each path starting with / and none under /wb/, which is the base's"
             {:config-key [:sessionless]}]
            (try (wb/handler (config :sessionless bad)) nil
                 (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))

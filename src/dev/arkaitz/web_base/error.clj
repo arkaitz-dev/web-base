@@ -26,7 +26,7 @@
   with nothing pointing back at the host code that built it."
   [datum]
   (when-not (int? (:status datum))
-    (throw (ex-info "error datum has no integer :status" {:datum datum}))))
+    (throw (ex-info "web-base: error datum has no integer :status" {:datum datum}))))
 
 (defn throw!
   "Throws `datum` as an exception the middleware turns back into a rendered
@@ -34,7 +34,7 @@
   response is the shorter path; this is for code deeper down."
   [datum]
   (check-datum! datum)
-  (throw (ex-info (str "web-base error " (:status datum))
+  (throw (ex-info (str "web-base: error " (:status datum))
                   (assoc datum :type ::error))))
 
 (defn- accepts-html?

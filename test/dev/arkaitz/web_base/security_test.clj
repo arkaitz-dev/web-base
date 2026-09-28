@@ -57,7 +57,7 @@
   (is (= DEFAULTS (headers-with {:frame-options nil})))
   (is (= DEFAULTS (headers-with {})))
   (doseq [bad [true :sameorigin 42]]
-    (is (= ["security :frame-options must be a string, false to omit it, or absent"
+    (is (= ["web-base: security :frame-options must be a string, false to omit it, or absent"
             {:config-key [:security :frame-options] :value bad}]
            (try (security/wrap-headers ok {:frame-options bad}) ::constructed
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
@@ -65,7 +65,7 @@
 
 (deftest csp-must-be-a-non-blank-string-when-given
   (doseq [bad [42 "" "   " :none]]
-    (is (= ["security :csp must be a non-blank policy string, or absent" {:config-key [:security :csp] :value bad}]
+    (is (= ["web-base: security :csp must be a non-blank policy string, or absent" {:config-key [:security :csp] :value bad}]
            (try (security/wrap-headers ok {:csp bad}) ::constructed
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str "refused at construction: " (pr-str bad))))
@@ -84,11 +84,11 @@
   (let [attempt (fn [hsts] (try (security/wrap-headers ok {:hsts hsts}) ::constructed
                                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))]
     (doseq [[hsts value] [[{} nil] [{:max-age -1} -1] [{:max-age "1"} "1"] [{:max-age 1.5} 1.5] [{:max-age nil} nil]]]
-      (is (= ["security :hsts needs a non-negative integer :max-age" {:config-key [:security :hsts :max-age] :value value}]
+      (is (= ["web-base: security :hsts needs a non-negative integer :max-age" {:config-key [:security :hsts :max-age] :value value}]
              (attempt hsts))
           (str "refused: " (pr-str hsts))))
     (doseq [hsts [true 42]]
-      (is (= ["security :hsts must be a map with :max-age" {:config-key [:security :hsts] :value hsts}] (attempt hsts))
+      (is (= ["web-base: security :hsts must be a map with :max-age" {:config-key [:security :hsts] :value hsts}] (attempt hsts))
           (str "a non-map names :hsts itself: " (pr-str hsts))))
     (is (fn? (security/wrap-headers ok {:hsts {:max-age 0}})))
     (is (fn? (security/wrap-headers ok {:hsts {:max-age 1}})))))

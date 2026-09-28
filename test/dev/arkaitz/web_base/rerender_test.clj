@@ -178,7 +178,7 @@
       (let [{:keys [app]} (fixture)
             r (:response (testing/visit (ready app) :post "/via" {"to" to}))]
         (is (= [500 (page 500 (frag 500))] [(:status r) (:body r)]) (str to ": the POST's error page"))
-        (is (= [(str "web-base rerender: no GET route for " to) {:path to}]
+        (is (= [(str "web-base: rerender: no GET route for " to) {:path to}]
                (some (fn [{:keys [throwable]}] (when throwable [(ex-message throwable) (ex-data throwable)]))
                      (lt/the-log)))
             (str to ": and the log names the path"))))))
@@ -193,7 +193,7 @@
             t (some :throwable (lt/the-log))]
         (is (= 500 (:status r)) (str label ": an error, not a hang"))
         (is (= 1 @runs) (str label ": the looping page ran once"))
-        (is (= [clojure.lang.ExceptionInfo "web-base rerender: /loop was reached from a rerender already" {:path "/loop"}]
+        (is (= [clojure.lang.ExceptionInfo "web-base: rerender: /loop was reached from a rerender already" {:path "/loop"}]
                [(class t) (ex-message t) (ex-data t)])
             (str label ": stopped by the guard, not by the stack"))))))
 

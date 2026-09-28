@@ -80,13 +80,13 @@
   which."
   [request path form]
   (when (contains? request :wb/form)
-    (throw (ex-info (str "web-base rerender: " path " was reached from a rerender already")
+    (throw (ex-info (str "web-base: rerender: " path " was reached from a rerender already")
                     {:path path})))
   (let [[uri qs] (str/split (str path) #"\?" 2)
         match    (some-> (::r/router request) (r/match-by-path uri))
         handler  (get-in match [:result :get :handler])]
     (when-not handler
-      (throw (ex-info (str "web-base rerender: no GET route for " path) {:path path})))
+      (throw (ex-info (str "web-base: rerender: no GET route for " path) {:path path})))
     (let [query    (if qs (codec/form-decode qs "UTF-8") {})
           query    (if (map? query) query {})
           response (handler (-> request
@@ -132,7 +132,7 @@
 
 (defn- require-key! [config k]
   (when (nil? (get config k))
-    (throw (ex-info (str "web-base config needs " k) {:config-key [k]}))))
+    (throw (ex-info (str "web-base: config needs " k) {:config-key [k]}))))
 
 (def ^:private owned-keys
   "The keys of every map inside the config that the base reads, by path. The top level
@@ -183,7 +183,7 @@
     (when-not (and (map? routes)
                    (every? #(and (string? %) (str/starts-with? % "/") (not (str/starts-with? % "/wb/"))) (keys routes))
                    (every? #(or (fn? %) (var? %)) (vals routes)))
-      (throw (ex-info (str "web-base config :sessionless must be a map of path to handler, each path"
+      (throw (ex-info (str "web-base: config :sessionless must be a map of path to handler, each path"
                            " starting with / and none under /wb/, which is the base's")
                       {:config-key [:sessionless]})))))
 
@@ -193,7 +193,7 @@
   construction, naming the path."
   [router routes]
   (when-let [taken (first (sort (filter #(r/match-by-path router %) (keys routes))))]
-    (throw (ex-info (str "web-base config :sessionless path " taken " is also one of :routes;"
+    (throw (ex-info (str "web-base: config :sessionless path " taken " is also one of :routes;"
                          " it would be served without the route's gate, session or CSRF")
                     {:config-key [:sessionless taken]}))))
 

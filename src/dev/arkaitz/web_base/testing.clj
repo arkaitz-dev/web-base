@@ -188,7 +188,7 @@
   ([b method path params] (visit b method path params nil))
   ([b method path params opts]
    (when (and (unsafe? method) (not (:token b)))
-     (throw (ex-info (str "web-base testing: a " (.toUpperCase (name method) Locale/ROOT) " to " path
+     (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
                           " with no CSRF token — GET a page that carries one first")
                      {:path path})))
    (loop [b b method method path path params params hops 0]
@@ -201,7 +201,7 @@
        (if (and (not (false? (:follow? opts))) (redirect? (:status response)) (location response))
          (if (< hops max-redirects)
            (recur b :get (location response) nil (inc hops))
-           (throw (ex-info (str "web-base testing: more than " max-redirects " redirects from " path)
+           (throw (ex-info (str "web-base: more than " max-redirects " redirects from " path)
                            {:path path})))
          b)))))
 

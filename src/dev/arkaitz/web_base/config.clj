@@ -17,11 +17,11 @@
 
 (defn- check-name! [var-name]
   (when-not (string? var-name)
-    (throw (ex-info "#wb/env takes the variable name as a string"
+    (throw (ex-info "web-base: #wb/env takes the variable name as a string"
                     {:given var-name}))))
 
 (defn- missing! [var-name]
-  (throw (ex-info (str "environment variable " var-name " is not set")
+  (throw (ex-info (str "web-base: environment variable " var-name " is not set")
                   {:env var-name})))
 
 (defn- env
@@ -43,14 +43,14 @@
   cannot be read."
   [variables source]
   (when-not (map? variables)
-    (throw (ex-info (str "variables from " source " must be a map of name to value")
+    (throw (ex-info (str "web-base: variables from " source " must be a map of name to value")
                     {:source source :given variables})))
   (doseq [[var-name value] variables]
     (when-not (string? var-name)
-      (throw (ex-info (str "variable name from " source " is not a string")
+      (throw (ex-info (str "web-base: variable name from " source " is not a string")
                       {:source source :name var-name})))
     (when-not (string? value)
-      (throw (ex-info (str "value of " var-name " from " source " is not a string")
+      (throw (ex-info (str "web-base: value of " var-name " from " source " is not a string")
                       {:source source :name var-name :value value}))))
   variables)
 
@@ -96,7 +96,7 @@
   (try (f)
        (catch ExceptionInfo e (throw e))
        (catch RuntimeException e
-         (throw (ex-info (str "config " source " is not valid EDN: " (ex-message e))
+         (throw (ex-info (str "web-base: config " source " is not valid EDN: " (ex-message e))
                          {:source source} e)))))
 
 (defn read-resource
@@ -106,7 +106,7 @@
   ([readers resource-name]
    (if-let [url (io/resource resource-name)]
      (reading resource-name #(read-string readers (slurp url)))
-     (throw (ex-info (str "config resource " resource-name " not found on the classpath")
+     (throw (ex-info (str "web-base: config resource " resource-name " not found on the classpath")
                      {:resource resource-name})))))
 
 (defn read-file
@@ -116,7 +116,7 @@
    (let [file (io/file path)]
      (if (.isFile file)
        (reading (str path) #(read-string readers (slurp file)))
-       (throw (ex-info (str "config file " path " not found")
+       (throw (ex-info (str "web-base: config file " path " not found")
                        {:file (str path)}))))))
 
 (defn env-file-readers

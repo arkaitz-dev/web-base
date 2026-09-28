@@ -35,15 +35,15 @@
 (deftest config-is-checked-at-construction--dict-default-locale-and-locale-fn-name-their-config-key
   (let [attempt (fn [config] (try (i18n/wrap identity config) ::constructed
                                   (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
-        no-dict ["i18n config needs :dict, a Tempura dictionary keyed by locale" {:config-key [:i18n :dict]}]
-        bad-def (fn [value] ["i18n :default-locale must be one of the dictionary's locales"
+        no-dict ["web-base: i18n config needs :dict, a Tempura dictionary keyed by locale" {:config-key [:i18n :dict]}]
+        bad-def (fn [value] ["web-base: i18n :default-locale must be one of the dictionary's locales"
                              {:config-key [:i18n :default-locale] :value value :locales [:en :es :zh-Hans :zh]}])]
     (doseq [config [{} {:dict {} :default-locale :en} {:dict nil :default-locale :en} {:dict [[:en {}]] :default-locale :en}]]
       (is (= no-dict (attempt config)) (str "no dictionary: " (pr-str config))))
     (doseq [[config value] [[{:dict D} nil] [{:dict D :default-locale :fr} :fr]
                             [{:dict D :default-locale "en"} "en"] [{:dict D :default-locale :EN} :EN]]]
       (is (= (bad-def value) (attempt config)) (str "default not a dictionary key: " (pr-str value))))
-    (is (= ["i18n :locale-fn must be a function of the request" {:config-key [:i18n :locale-fn] :value "en"}]
+    (is (= ["web-base: i18n :locale-fn must be a function of the request" {:config-key [:i18n :locale-fn] :value "en"}]
            (attempt {:dict D :default-locale :es :locale-fn "en"}))
         "a non-callable :locale-fn is refused")
     (let [calls (atom 0)]
@@ -129,7 +129,7 @@
       (is (= [{:uri "/" :request-method :get :headers {"host" "localhost" "accept-language" "en"}}] @calls)
           "called once, with the request as received")))
   (doseq [bad [:en [nil] ["en" nil]]]
-    (is (= [":locale-fn must return nil or a sequence of locales" {:config-key [:i18n :locale-fn] :value bad}]
+    (is (= ["web-base: i18n :locale-fn must return nil or a sequence of locales" {:config-key [:i18n :locale-fn] :value bad}]
            (try ((app-with {:default-locale :es :locale-fn (constantly bad)}) (get*))
                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         (str "a bad return value is named: " (pr-str bad)))))

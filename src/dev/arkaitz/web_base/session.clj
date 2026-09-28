@@ -46,19 +46,19 @@
   [{:keys [store key]}]
   (cond
     (and store key)
-    (throw (ex-info "session config takes :store or :key, not both"
+    (throw (ex-info "web-base: session config takes :store or :key, not both"
                     {:config-key [:session]}))
 
     store store
 
     (nil? key)
-    (throw (ex-info "session config needs :store or :key; the base never generates a key"
+    (throw (ex-info "web-base: session config needs :store or :key; the base never generates a key"
                     {:config-key [:session :key]}))
 
     :else
     (let [bytes (decode-key key)]
       (when-not (and bytes (= key-length (count bytes)))
-        (throw (ex-info (str "session :key must be a byte array or a base64 string of exactly "
+        (throw (ex-info (str "web-base: session :key must be a byte array or a base64 string of exactly "
                              key-length " bytes")
                         {:config-key [:session :key]
                          :given      (if (string? key) :string (type key))
@@ -71,12 +71,12 @@
   [attrs]
   (let [attrs (merge default-cookie-attrs attrs)]
     (when-not (same-site-values (:same-site attrs))
-      (throw (ex-info "session :cookie-attrs :same-site must be :strict, :lax or :none"
+      (throw (ex-info "web-base: session :cookie-attrs :same-site must be :strict, :lax or :none"
                       {:config-key [:session :cookie-attrs :same-site]
                        :value      (:same-site attrs)})))
     ;; Browsers drop a SameSite=None cookie that is not Secure, silently.
     (when (and (= :none (:same-site attrs)) (not (:secure attrs)))
-      (throw (ex-info "session :cookie-attrs :same-site :none requires :secure true"
+      (throw (ex-info "web-base: session :cookie-attrs :same-site :none requires :secure true"
                       {:config-key [:session :cookie-attrs :secure] :value (:secure attrs)})))
     attrs))
 
@@ -111,6 +111,6 @@
   is fine, its token is dropped: whoever fixed the old session knew it."
   [response new-session]
   (when-not (map? new-session)
-    (throw (ex-info "rotate needs the new session as a map; nil would delete the session"
+    (throw (ex-info "web-base: rotate needs the new session as a map; nil would delete the session"
                     {:session new-session})))
   (assoc response :session (vary-meta new-session assoc :recreate true)))

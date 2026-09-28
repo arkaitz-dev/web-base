@@ -59,7 +59,7 @@
             total  (count stack)
             height (or (:wb/height response) (if page? total 0))]
         (when-not (and (nat-int? height) (<= height total))
-          (throw (ex-info "response :wb/height is not within the route's layout stack"
+          (throw (ex-info "web-base: response :wb/height is not within the route's layout stack"
                           {:wb/height (:wb/height response) :layouts total})))
         (let [markup   (fold body request (:wb/slots response) stack height)
               document (cond->> (html markup)

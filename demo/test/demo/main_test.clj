@@ -25,7 +25,7 @@
             "the session key is the file's")
         (is (ig/ref? (get-in config [:demo/web-config :store]))
             "read by integrant's reader, so #ig/ref survived"))
-      (is (= ["environment variable WB_SESSION_KEY is not set" {:env "WB_SESSION_KEY"}]
+      (is (= ["web-base: environment variable WB_SESSION_KEY is not set" {:env "WB_SESSION_KEY"}]
              (try (main/read-config "/nope/none.local.edn") ::no-throw
                   (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
           "an absent file: the environment is the only source, and it has no key")

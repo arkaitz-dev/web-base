@@ -12,6 +12,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [dev.arkaitz.web-base.htmx :as htmx]
+            [dev.arkaitz.web-base.log :as request-log]
             [dev.arkaitz.web-base.render :as render]
             [reitit.coercion :as coercion]
             [reitit.core :as r])
@@ -126,7 +127,7 @@
         {:status 400})
 
       (do (log/error e "unhandled exception" {:request-id (:wb/request-id request)
-                                               :uri        (:uri request)})
+                                               :uri        (request-log/path-of request)})
           {:status 500}))))
 
 (defn middleware
@@ -167,7 +168,7 @@
       (let [result (:result match)]
         (if (get result (:request-method request))
           (do (log/error "handler returned nil" {:request-id (:wb/request-id request)
-                                                 :uri        (:uri request)})
+                                                 :uri        (request-log/path-of request)})
               (render-error {:status 500} request))
           (assoc-in (render-error {:status 405} request)
                     [:headers "Allow"] (allowed-methods result))))

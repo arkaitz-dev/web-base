@@ -26,22 +26,35 @@
     (.nextBytes ^SecureRandom @random bytes)
     (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes)))
 
+(defn path-of
+  "The path every log line of the base shows for `request`: the access line's, so a
+  path that carries a secret is hidden from an error's datum as well as from it."
+  [request]
+  (or (:wb/logged-path request) (:uri request)))
+
 (defn- access-line [request status elapsed-ns]
   ;; Locale/ROOT: under a Turkish default locale "options" upper-cases to OPTİONS.
   (log/infof "%s %s %s %dms"
              (.toUpperCase ^String (name (:request-method request)) Locale/ROOT)
-             (:uri request)
+             (path-of request)
              (or status "-")
              (quot elapsed-ns 1000000)))
 
 (defn wrap-request-id
   "The outermost middleware: every response, including a 404 or a static
   asset, carries the id. If the handler throws, the access line still goes
-  out with a 500 and the throwable propagates; the MDC is cleared either way."
-  [handler]
+  out with a 500 and the throwable propagates; the MDC is cleared either way.
+
+  `logged-path` answers what the line shows for a request's path — its `:uri` unless
+  given. It is asked of the request as it arrived and kept on it as
+  `:wb/logged-path`, so what it hides stays hidden from every line of the base,
+  and when an inner layer throws."
+  ([handler] (wrap-request-id handler :uri))
+  ([handler logged-path]
   (fn [request]
-    (let [id    (new-id)
-          start (System/nanoTime)]
+    (let [id      (new-id)
+          start   (System/nanoTime)
+          request (assoc request :wb/logged-path (logged-path request))]
       (MDC/put mdc-key id)
       (try
         (let [response (try
@@ -55,4 +68,4 @@
           (access-line request (:status response) (- (System/nanoTime) start))
           (some-> response (assoc-in [:headers "X-Request-Id"] id)))
         (finally
-          (MDC/remove mdc-key))))))
+          (MDC/remove mdc-key)))))))

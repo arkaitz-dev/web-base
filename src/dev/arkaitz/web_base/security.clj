@@ -9,6 +9,7 @@
   policy means doing without them, which the demo does."
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [dev.arkaitz.web-base.log :as request-log]
             [ring.middleware.anti-forgery :as anti-forgery]
             [ring.middleware.anti-forgery.session :as anti-forgery-session]
             [ring.middleware.anti-forgery.strategy :as strategy])
@@ -134,7 +135,7 @@
                    (when used?
                      (log/error (str "a response that rotates the session rendered a CSRF token the new"
                                      " session cannot keep — render it through the base, or redirect")
-                                {:request-id (:wb/request-id request) :uri (:uri request)})
+                                {:request-id (:wb/request-id request) :uri (request-log/path-of request)})
                      (fresh-token)))
         session (:session response)]
     (assoc response :session (if token (assoc session session-token-key token) (dissoc session session-token-key)))))
@@ -198,7 +199,7 @@
           (log/error (str "a response that rotates the session read its CSRF token before the base"
                           " rendered it — the form built with it will be refused; read it in a layout,"
                           " or redirect")
-                     {:request-id (:wb/request-id request) :uri (:uri request)}))
+                     {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
         (assoc request :anti-forgery-token (or @minted (vreset! minted (fresh-token)))))
     request))
 

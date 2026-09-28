@@ -39,6 +39,15 @@
               ["/login-content" {:wb/layouts [with-form]
                                  :post (fn [r] (session/rotate {:status 200 :body [:p (security/csrf-field r)]}
                                                                (assoc (:session r) :user "ann")))}]
+              ;; The same two logins under a path carrying a secret the route hides, as a
+              ;; magic link's redemption would.
+              ["/redeem-string/:token" {:wb/log-path :template
+                                        :post (fn [r] (session/rotate {:status 200
+                                                                       :body (str "<form>" (security/csrf-token r) "</form>")}
+                                                                      (assoc (:session r) :user "ann")))}]
+              ["/redeem-content/:token" {:wb/log-path :template :wb/layouts [with-form]
+                                         :post (fn [r] (session/rotate {:status 200 :body [:p (security/csrf-field r)]}
+                                                                       (assoc (:session r) :user "ann")))}]
               ["/post" {:post (fn [_] {:status 200 :body "posted"})}]]}))
 
 (defn- sid [response] (get (testing/cookies response) "ring-session"))
@@ -131,3 +140,18 @@
     (is (nil? (get-in (handler (-> (mock/request :get "/form") (mock/header "HX-Request" "true")))
                       [:headers "HX-Refresh"]))
         "control: a fragment that rotates nothing asks for no reload")))
+
+(deftest the-rotation-errors-show-a-marked-routes-template-and-never-its-secret
+  (doseq [[path message] [["/redeem-string/SECRET-TOKEN" "a response that rotates the session rendered a CSRF token"]
+                          ["/redeem-content/SECRET-TOKEN" "a response that rotates the session read its CSRF token"]]]
+    (let [[handler _ old-sid old] (signed-in-page)]
+      (lt/with-log
+        (handler (-> (mock/request :post path)
+                     (mock/header "Cookie" (str "ring-session=" old-sid))
+                     (mock/header "X-CSRF-Token" old)))
+        (let [error (first (filter #(str/starts-with? (str (:message %)) message) (lt/the-log)))]
+          (is (some? error) (str path ": witness: the rotation error was logged: " (mapv :message (lt/the-log))))
+          (is (str/includes? (str (:message error)) (str/replace path "SECRET-TOKEN" ":token"))
+              (str path ": its datum names the route by its template: " (:message error)))
+          (is (not (str/includes? (pr-str (mapv :message (lt/the-log))) "SECRET-TOKEN"))
+              (str path ": and no line carries the secret: " (mapv :message (lt/the-log)))))))))

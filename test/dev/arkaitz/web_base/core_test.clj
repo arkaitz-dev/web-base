@@ -457,3 +457,106 @@
           r   (try (app (mock/request :get "/sl")) (catch Throwable t {:escaped (.getName (class t))}))]
       (is (= [500 (page 500 (frag 500))] [(:status r) (:body r)])
           (str "a sessionless route that throws gets the same page: " (pr-str (:escaped r)))))))
+
+;; --- :wb/log-path: a path that carries a secret stays out of every log line ----------
+
+(defn- log-lines
+  "Every entry captured, as text, the throwable's message and data included: what a
+  secret would have to be absent from."
+  []
+  (pr-str (mapv (juxt :logger-ns :level :message #(some-> % :throwable ex-message) #(some-> % :throwable ex-data))
+                (lt/the-log))))
+
+(defn- access-lines []
+  (->> (lt/the-log)
+       (filter #(= 'dev.arkaitz.web-base.log (ns-name (:logger-ns %))))
+       (mapv #(clojure.string/replace (:message %) #"\d+ms$" "<n>ms"))))
+
+(def ^:private marked-routes
+  [["/login/redeem/:token" {:wb/log-path :template
+                            :get (fn [r] (if (= "gone" (-> r :path-params :token)) {:status 404 :body ""} {:status 200 :body ""}))}]
+   ["/things/:id" {:get (fn [_] {:status 200 :body ""})}]
+   ["/priv/:token" {:wb/log-path :template :wb/gate wb/subject-present? :get (fn [_] {:status 200 :body ""})}]
+   ["/admin" {:wb/log-path :template}
+    ["/:secret" {:get (fn [_] {:status 200 :body ""})}]]
+   ["/void/:token" {:wb/log-path :template :get (fn [_] nil)}]
+   ["/confirm/:token/now" {:wb/log-path :template :get (fn [_] {:status 200 :body ""})}]])
+
+(deftest access-line-shows-the-template-only-for-a-route-marked-log-path-template--uri-elsewhere--never-the-query
+  (let [app (wb/handler (config :routes marked-routes))]
+    (lt/with-log
+      (doseq [[method uri] [[:get "/login/redeem/SECRET-TOKEN?next=%2Fx"] [:get "/login/redeem/gone"]
+                            [:post "/login/redeem/SECRET-TOKEN"] [:get "/things/42?q=1"]
+                            [:get "/priv/SECRET-TOKEN"] [:get "/admin/SECRET-TOKEN"] [:get "/void/SECRET-TOKEN"]
+                            ;; The token mid-path and a query after it: matched with the query,
+                            ;; the literal last segment would not match and the path would leak.
+                            [:get "/confirm/SECRET-TOKEN/now?a=1"]]]
+        (app (mock/request method uri)))
+      (is (= ["GET /login/redeem/:token 200 <n>ms" "GET /login/redeem/:token 404 <n>ms"
+              "POST /login/redeem/:token 403 <n>ms" "GET /things/42 200 <n>ms"
+              "GET /priv/:token 303 <n>ms" "GET /admin/:secret 200 <n>ms" "GET /void/:token 500 <n>ms"
+              "GET /confirm/:token/now 200 <n>ms"]
+             (access-lines))
+          "a marked route logs its template whatever answered — handler, 404, the CSRF refusal, gate, nil — and an unmarked one its path, never the query")
+      (is (clojure.string/includes? (log-lines) "handler returned nil {:request-id")
+          "witness: the nil handler's error line was captured, so the sweep below reads it")
+      (is (not (clojure.string/includes? (log-lines) "SECRET-TOKEN"))
+          (str "the token reaches no line, the error's datum included: " (log-lines))))
+    (lt/with-log
+      ((wb/handler (config :routes [["/open" {:wb/log-path :template}
+                                     ["/:secret" {:wb/log-path nil :get (fn [_] {:status 200 :body ""})}]]]))
+       (mock/request :get "/open/SECRET-TOKEN"))
+      (is (= ["GET /open/:secret 200 <n>ms"] (access-lines))
+          "a child's nil does not unmark it: reitit merges a nil as no value, so a parent's mark cannot be dropped by accident — a canary for reitit's merge, which the README promises"))
+    (lt/with-log
+      (app (mock/request :get "/nowhere/SECRET-TOKEN"))
+      (is (= ["GET /nowhere/SECRET-TOKEN 404 <n>ms"] (access-lines))
+          "control: a path no route matches has no template, and logs as it came"))))
+
+(deftest a-session-store-that-throws-on-a-marked-route-logs-a-500-with-the-template-and-the-token-reaches-no-log-line
+  (let [broken  (wb/handler (config :routes marked-routes :session {:store (store-that-throws :read)}))
+        healthy (wb/handler (config :routes marked-routes))
+        cookie  #(mock/header % "Cookie" "ring-session=old")]
+    (lt/with-log
+      (let [r (broken (cookie (mock/request :get "/login/redeem/SECRET-TOKEN")))]
+        (is (= 500 (:status r)) "witness: the store threw before the router ran")
+        (is (= 1 (count (filter #(= :error (:level %)) (lt/the-log)))) "witness: the boundary logged it, once")
+        (is (= ["GET /login/redeem/:token 500 <n>ms"] (access-lines)) "the access line shows the template")
+        (is (not (clojure.string/includes? (log-lines) "SECRET-TOKEN"))
+            (str "and the token reaches no line, the unhandled exception's datum included: " (log-lines)))))
+    (lt/with-log
+      (broken (cookie (mock/request :get "/things/SECRET-TOKEN")))
+      (is (clojure.string/includes? (pr-str (mapv :message (filter #(= :error (:level %)) (lt/the-log)))) "SECRET-TOKEN")
+          "control: an unmarked route under the same failure logs its path in the error's datum, so the sweep above can see one there"))
+    (lt/with-log
+      (is (= 200 (:status (healthy (mock/request :get "/login/redeem/SECRET-TOKEN")))) "control: a healthy store answers")
+      (is (= ["GET /login/redeem/:token 200 <n>ms"] (access-lines))))))
+
+(deftest an-unknown-log-path-value-or-one-set-under-a-method-is-refused-when-the-handler-is-built--naming-the-route
+  (let [h       (fn [_] {:status 200 :body ""})
+        attempt (fn [routes] (try (wb/handler (config :routes routes)) ::built
+                                  (catch ExceptionInfo e [(ex-message e) (ex-data e)])))]
+    (is (= ["web-base: route /a/:t has :wb/log-path :uri; the only value is :template"
+            {:config-key [:routes "/a/:t" :wb/log-path]}]
+           (attempt [["/a/:t" {:wb/log-path :uri :get h}]])))
+    (is (= ["web-base: route /a/:t has :wb/log-path \"template\"; the only value is :template"
+            {:config-key [:routes "/a/:t" :wb/log-path]}]
+           (attempt [["/a/:t" {:wb/log-path "template" :get h}]])))
+    (is (= ["web-base: route /a/:t sets :wb/log-path under :get; put it on the route's own data, where it covers every method"
+            {:config-key [:routes "/a/:t" :get :wb/log-path]}]
+           (attempt [["/a/:t" {:get {:wb/log-path :template :handler h}}]]))
+        "a method's data is not what a match reads, so the key there would hide nothing")
+    (is (= ["web-base: route /a/:t sets :wb/log-path under :delete; put it on the route's own data, where it covers every method"
+            {:config-key [:routes "/a/:t" :delete :wb/log-path]}]
+           (attempt [["/a/:t" {:get h :delete {:wb/log-path :template :handler h}}]]))
+        "under any method, not only a GET")
+    (is (= ["web-base: route /g/:t has :wb/log-path :uri; the only value is :template"
+            {:config-key [:routes "/g/:t" :wb/log-path]}]
+           (attempt [["/g" {:wb/log-path :uri} ["/:t" {:get h}]]]))
+        "a value set on a parent reaches its children, and is refused there")
+    (is (= ["web-base: route /b/:t has :wb/log-path :uri; the only value is :template"
+            {:config-key [:routes "/b/:t" :wb/log-path]}]
+           (attempt [["/a/:t" {:wb/log-path :template :get h}] ["/b/:t" {:wb/log-path :uri :get h}]]))
+        "every route is checked, not only the first")
+    (is (= ::built (attempt [["/a/:t" {:wb/log-path nil :get h}]])) "control: an explicit nil is the absent option")
+    (is (= ::built (attempt [["/a/:t" {:wb/log-path :template :get h}]])) "control: :template builds")))

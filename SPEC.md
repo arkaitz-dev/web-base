@@ -593,6 +593,13 @@ Hiccup escapes every string and attribute unless the host says `raw`; Ring's res
 handler refuses `..` and symlinks outside the root; the access line never logs the
 query string.
 
+**Amended for 0.9.0, 2026-09-28:** a path can carry a secret too — a magic link's token
+is its last segment. A route whose data says `:wb/log-path :template` is logged by its
+route template, in the access line and in every error line of the base, decided by
+matching the router before anything else runs, so a session store that throws first
+cannot put the token in the log. A path that matches no route keeps its own spelling;
+what the host puts in an exception's data the base cannot see.
+
 **What Ring does not ship**, checked 2026-09-08 in the jars: `ring-core` carries no
 security headers and no CSRF protection. They live in sibling libraries by the same
 author — `ring-anti-forgery` (synchroniser token kept in the session, `X-CSRF-Token`

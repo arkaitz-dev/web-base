@@ -267,6 +267,26 @@ request read it through `csrf-field` or `csrf-token`, so an anonymous request th
 renders neither — a health probe, JSON, a redirect — creates no session; read it through
 those two, while the handler runs, and never from `:anti-forgery-token` directly.
 
+A layout receives the request as the router saw it: what a route's own `:middleware` adds
+never reaches it, because that middleware sits innermost, around the handler alone. What
+a layout, a gate and a handler all need about the person — a role, a time zone, the
+address they signed in with — belongs in the subject: compose `:subject-fn` so it answers
+a map instead of an id, and `:wb/subject` carries it everywhere at once.
+
+```clojure
+:subject-fn (fn [request]
+              (when-let [id ((auth/subject-fn ceremony) request)]
+                (account-of datasource id)))   ; {:id … :role … :zone …}; nil when there is none
+```
+
+Answer nil exactly when there is no live subject — a gate reads non-nil as "signed in",
+and auth-base's `wrap-revoked` reads nil after a session as "revoked". Anything only one
+page needs stays in its handler and reaches the layouts through `:wb/slots`.
+
+An `:error-layout` renders without a session token on its request, so a crawler's 404
+writes no session row: a shell fragment that draws a form with `csrf-field` — a language
+switcher in the footer, a logout button — belongs in the page layouts only.
+
 ### Forms and validation
 
 Two roads, and they do not meet. Route `:parameters` with a coercion refuse an
@@ -358,6 +378,9 @@ a request with no token known throws instead of sending.
 `{:follow? false}` sends one request and follows nothing, for a test that asks *who*
 answered — a handler that redirects to a gated page lands on the login page exactly as
 the gate would — and the jar still takes what that response set.
+`{:headers {"accept-language" "es"}}` adds headers to every request, redirects followed
+included, as a browser keeps sending its own; one `visit` writes itself — the cookie, the
+host, the body's, the CSRF header or a swap's — throws, naming it.
 
 Hiccup 2 escapes `'` as `&apos;`, never as `&#39;`, so a negative assertion on a
 rendered body — `(not (str/includes? body "&#39;"))` — is vacuous: it passes whatever
@@ -381,6 +404,22 @@ Target the element the server answers with, by its id, and swap its outer HTML: 
 whose answer is `[:form#thing …]` wants `hx-target="#thing" hx-swap="outerHTML"`. Aimed
 at a parent, or swapping the inner HTML, the answer lands inside what it was meant to
 replace, and the page nests a form in a form.
+
+A page and its own fragment can share one route — a list that filters as you type, whose
+address must stay shareable. Branch on `htmx/partial-request?`: a swap gets the list
+alone, a navigation the page with the list inside. `hx-push-url="true"` on the input keeps
+the address bar on the filtered URL, so a reload or a copied link lands on the same page;
+an element elsewhere that the answer must also refresh — a counter, the list after an
+add — rides along with `hx-swap-oob="true"` and its own id.
+
+```clojure
+(defn contacts [request]
+  (let [q    (get-in request [:query-params "q"] "")
+        rows (list-of (search q))]
+    (if (htmx/partial-request? request)
+      (response/ok rows)
+      (response/ok (contacts-page q rows)))))
+```
 
 ### Lifecycle
 
@@ -530,6 +569,29 @@ carries in `X-Request-Id`, so `%X{request-id}` in the host's pattern puts it on 
 line written on that request's thread. A library that plugs into a host of the base —
 auth-base does — logs through the same facade and gets the id for nothing, without
 depending on the base.
+
+Every request gets one access line — method, path, status, milliseconds — and never its
+query string. A path that carries a secret, a sign-in token above all, is logged by its
+route template instead when the route says so in its data:
+
+```clojure
+["/login/redeem/:token" {:wb/log-path :template :get redeem}]   ; GET /login/redeem/:token 303 4ms
+```
+
+The decision is taken against the router before anything else runs, so it holds when a
+session store throws first, and every error line of the base shows the same path. It
+belongs on the route's own data, where it covers every method; under `:get` it would hide
+nothing, and is refused, as is any value but `:template`.
+
+A parent's mark reaches every route under it, and a child cannot take it back — reitit
+merges a `nil` as no value — so a group marked for a secret stays hidden whole.
+
+It hides the path only where the route matches. A request that misses it — a trailing
+slash, a segment a mail client or link scanner appended — is a 404 logged as it came, and
+a `:sessionless` path is one no route may match, so a secret there cannot be hidden this
+way. Nor can the base keep a secret out of an exception the host throws: a logged
+`ex-info` prints its data, so an `ex-info` carrying the request or its `:path-params`
+logs the token with it.
 
 ### Configuration, and not exporting secrets on every start
 

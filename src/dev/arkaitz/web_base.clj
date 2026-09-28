@@ -176,7 +176,7 @@
         (when-let [h (get handlers (:uri request))]
           (or (h request)
               (do (tools-log/error "sessionless handler returned nil" {:request-id (:wb/request-id request)
-                                                                :uri        (:uri request)})
+                                                                :uri        (log/path-of request)})
                   (render-error {:status 500} request))))))))
 
 (defn- validate-sessionless! [routes]
@@ -198,6 +198,33 @@
                          " it would be served without the route's gate, session or CSRF")
                     {:config-key [:sessionless taken]}))))
 
+(defn- logged-path
+  "What the access line shows for a request's path: the matched route's template for a
+  route whose data says `:wb/log-path :template` — a path that carries a secret, such
+  as a sign-in token — and the `:uri` otherwise. Matched here, against the router, so
+  the answer does not depend on any inner layer having run. Any other value, or the key
+  on one method's data where a match cannot see it, is refused naming the route.
+
+  A path that matches no route has no template, and logs as it came: a mistyped or
+  truncated link to a marked route — a trailing slash, a segment a scanner appended —
+  is a 404 whose line shows the secret it carried."
+  [router]
+  (doseq [[path data] (r/routes router)]
+    (when-not (contains? #{nil :template} (:wb/log-path data))
+      (throw (ex-info (str "web-base: route " path " has :wb/log-path " (pr-str (:wb/log-path data))
+                           "; the only value is :template")
+                      {:config-key [:routes path :wb/log-path]})))
+    (doseq [[method method-data] (select-keys data ring/http-methods)
+            :when (and (map? method-data) (contains? method-data :wb/log-path))]
+      (throw (ex-info (str "web-base: route " path " sets :wb/log-path under " method
+                           "; put it on the route's own data, where it covers every method")
+                      {:config-key [:routes path method :wb/log-path]}))))
+  (fn [request]
+    (let [match (r/match-by-path router (:uri request))]
+      (if (= :template (get-in match [:data :wb/log-path]))
+        (:template match)
+        (:uri request)))))
+
 (defn- with-assets
   "Assets first — the base's `/wb/` before the host's, so a host file cannot
   shadow the base's own — then the host's sessionless routes, then `app` for
@@ -217,7 +244,9 @@
   "Builds the Ring handler from the host's config:
 
     :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
-                  inherited by nested routes (layouts concatenate, a child's gate replaces)
+                  inherited by nested routes (layouts concatenate, a child's gate replaces);
+                  `:wb/log-path :template` logs the route's template instead of its path,
+                  for a path that carries a secret
     :session      `{:key base64-or-bytes}` or `{:store s}` (required)
     :subject-fn   request → subject or nil (default: always nil)
     :login-path   where a refusal without a subject goes (required iff a route has :wb/gate)
@@ -274,7 +303,7 @@
         (->> (with-assets static (sessionless-handler sessionless bare-error)))
         (cond-> (:proxy? security) security/wrap-proxy)
         (security/wrap-headers security)
-        log/wrap-request-id)))
+        (log/wrap-request-id (logged-path router)))))
 
 (def start
   "`(start handler {:port n})` → `{:server s :port n}`."

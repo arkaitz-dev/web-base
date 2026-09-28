@@ -469,7 +469,9 @@ the number admitted differs. A request still running when `stop`'s window closes
 interrupted, as on platform threads. It needs JDK 21 or later — on an older JVM `start`
 refuses, naming `:virtual-threads?` — and on JDK 21 to 23 a virtual thread blocked inside
 `synchronized` code pins the carrier it runs on, of which there is one per core: a driver
-that blocks that way brings the freeze back with fewer threads. JDK 24 removed that.
+that blocks that way brings the freeze back with fewer threads. JDK 24 removed that. In a
+GraalVM native image it runs as on the JVM — measured after 0.9.0's release on a generated
+project, a macOS binary and a static musl one, each signing somebody in.
 
 ### A native binary
 

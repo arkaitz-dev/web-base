@@ -344,9 +344,10 @@ For a whole flow, `testing/browser` is that chain as a value:
 
 `visit` answers a new browser: the jar accumulated (a deletion forgets), the token of
 the last page that had one, 301/302/303 followed as a GET up to ten times, and `:path`
-— the last request's path and query string, which is the address bar. A POST with no
-token known throws instead of sending; `{:htmx? true}` sends the token as the header
-with the headers of a swap, and leaves an `HX-Redirect` for the test to read.
+— the last request's path and query string, which is the address bar. `:post`, `:put`,
+`:patch` and `:delete` send the params as a form with the token as its hidden field, and
+one with no token known throws instead of sending; `{:htmx? true}` sends the token as the
+header with the headers of a swap, and leaves an `HX-Redirect` for the test to read.
 `{:follow? false}` sends one request and follows nothing, for a test that asks *who*
 answered — a handler that redirects to a gated page lands on the login page exactly as
 the gate would — and the jar still takes what that response set.

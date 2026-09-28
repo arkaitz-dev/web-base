@@ -143,10 +143,12 @@
                           ["/login-as" {:post (fn [r] (session/rotate {:status 303 :headers {"Location" "/me"} :body ""}
                                                                       {:user (get-in r [:params "who"])}))}]
                           ["/me" {:get (fn [r] {:status 200 :body (pr-str (dissoc (:session r) :ring.middleware.anti-forgery/anti-forgery-token))})}]
-                          ["/echo" {:post (fn [r] {:status 200
-                                                   :body   (pr-str {:form (:form-params r)
-                                                                    :hdr  (get-in r [:headers "x-csrf-token"])
-                                                                    :addr (:remote-addr r)})})}]
+                          ["/echo" (let [echo (fn [r] {:status 200
+                                                       :body   (pr-str {:form   (:form-params r)
+                                                                        :hdr    (get-in r [:headers "x-csrf-token"])
+                                                                        :addr   (:remote-addr r)
+                                                                        :method (:request-method r)})})]
+                                     {:post echo :put echo :patch echo :delete echo})]
                           ["/frag" {:wb/layouts [shell/page] :post (fn [_] (response/ok [:p "posted"]))}]
                           ["/set-a" {:get (fn [r] {:status 200 :headers {"Set-Cookie" [(str "a=" (get-in r [:params "v"]) "; Path=/")]} :body "ok"})}]
                           ["/del-a" {:get (fn [_] {:status 200 :headers {"Set-Cookie" ["a=; Max-Age=0; Path=/"]} :body "ok"})}]
@@ -354,3 +356,28 @@
     (is (= [false false] [(testing/gate-refusal? {:status 200 :headers {} :body "login page"} "/login")
                           (testing/gate-refusal? {:status 303} "/login")])
         "nor the login page a followed refusal lands on, nor a response with no headers")))
+
+(deftest put-patch-and-delete-carry-the-token-exactly-as-a-post-does
+  (let [{:keys [app log]} (browser-app)
+        b (testing/visit (testing/browser app) :get "/form")]
+    (is (string? (:token b)) "witness: the form page gave the browser a token")
+    (doseq [method [:put :patch :delete]]
+      (is (= 403 (:status (:response (testing/visit (assoc b :token "wrong") method "/echo" {:x "1"}))))
+          (str "control: CSRF guards " method ", so the token below is what lets it through"))
+      (let [r (:response (testing/visit b method "/echo" {:x "1"}))]
+        (is (= [200 {:form {"x" "1" "__anti-forgery-token" (:token b)} :hdr nil :addr "127.0.0.1" :method method}]
+               [(:status r) (edn/read-string (:body r))])
+            (str method " sends the form with the token as its hidden field")))
+      (let [r (:response (testing/visit b method "/echo" {:x "1"} {:htmx? true}))]
+        (is (= [200 {:form {"x" "1"} :hdr (:token b) :addr "127.0.0.1" :method method}]
+               [(:status r) (edn/read-string (:body r))])
+            (str method " under htmx sends the token as the header and not in the form")))
+      (reset! log [])
+      (let [e (try (testing/visit (testing/browser app) method "/echo" {:x "1"}) nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= [(str "web-base testing: a " ({:put "PUT" :patch "PATCH" :delete "DELETE"} method) " to /echo with no CSRF token"
+                     " — GET a page that carries one first")
+                {:path "/echo"}]
+               [(ex-message e) (ex-data e)])
+            (str method " with no token known throws, naming why"))
+        (is (= [] @log) (str method ": before anything was sent"))))))

@@ -123,12 +123,15 @@
         [uri qs] (str/split path #"\?" 2)]
     [(if (str/blank? uri) "/" uri) qs]))
 
+(def ^:private unsafe?
+  "The methods CSRF protects, and so the ones that carry the token and a form body."
+  #{:post :put :patch :delete})
+
 (defn- request-of
   [{:keys [jar token]} method path params {:keys [htmx? remote-addr]}]
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
-        post?    (= :post method)
-        body     (when post?
+        body     (when (unsafe? method)
                    (form-body (cond-> (vec params)
                                 (not htmx?) (conj ["__anti-forgery-token" token]))))
         bytes    (some-> ^String body (.getBytes "UTF-8"))]
@@ -160,15 +163,16 @@
   10)
 
 (defn visit
-  "The browser after sending `method` (`:get` or `:post`) to `path` with form `params`,
-  holding the final `:response` and, as `:path`, where it landed — the address bar, with
-  its query string, after every redirect was followed.
+  "The browser after sending `method` (`:get`, `:post`, `:put`, `:patch` or `:delete`) to
+  `path` with form `params`, holding the final `:response` and, as `:path`, where it
+  landed — the address bar, with its query string, after every redirect was followed.
 
-  - A POST carries the CSRF token of the last page that had one, as the hidden field a
-    form would send — or, with `{:htmx? true}`, as the header the shell makes htmx send,
-    with the headers of a swap. A POST with no token known throws: a 403 that looked
-    like the application's fault is the failure it replaces. After a login the session,
-    and with it the token, is new — GET a page before the next POST.
+  - A POST, PUT, PATCH or DELETE sends `params` as a form body and carries the CSRF
+    token of the last page that had one, as the hidden field a form would send — or,
+    with `{:htmx? true}`, as the header the shell makes htmx send, with the headers of a
+    swap. One with no token known throws: a 403 that looked like the application's
+    fault is the failure it replaces. After a login the session, and with it the token,
+    is new — GET a page before the next one.
   - A 301, 302 or 303 is followed as a GET through the same jar, up to ten times; an
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
@@ -183,9 +187,9 @@
   ([b method path] (visit b method path nil nil))
   ([b method path params] (visit b method path params nil))
   ([b method path params opts]
-   (when (and (= :post method) (not (:token b)))
-     (throw (ex-info (str "web-base testing: a POST to " path " with no CSRF token — GET a page that"
-                          " carries one first")
+   (when (and (unsafe? method) (not (:token b)))
+     (throw (ex-info (str "web-base testing: a " (.toUpperCase (name method) Locale/ROOT) " to " path
+                          " with no CSRF token — GET a page that carries one first")
                      {:path path})))
    (loop [b b method method path path params params hops 0]
      (let [response ((:handler b) (request-of b method path params opts))

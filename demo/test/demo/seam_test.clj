@@ -41,10 +41,13 @@
 (deftest the-gate-speaks-htmx-and-the-demo-s-own-login-satisfies-it
   (let [app (app)]
     (let [r (get* app "/private")]
-      (is (= [303 "/login"] [(:status r) (get-in r [:headers "Location"])]) "a navigation to the private page goes to the login"))
+      (is (testing/gate-refusal? r "/login")
+          (str "a navigation to the private page goes to the login — got status " (:status r)
+               ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
     (let [r (get* app "/private" "HX-Request" "true")]
-      (is (= [200 "/login" nil] [(:status r) (get-in r [:headers "HX-Redirect"]) (get-in r [:headers "Location"])])
-          "an htmx request gets HX-Redirect and never a Location"))
+      (is (testing/gate-refusal? r "/login")
+          (str "an htmx request gets HX-Redirect and never a Location — got status " (:status r)
+               ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
     (let [form    (get* app "/login")
           token   (testing/csrf-token form)
           login   (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})

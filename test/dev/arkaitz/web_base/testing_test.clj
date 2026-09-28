@@ -370,7 +370,14 @@
         "a form's fields replace the action's own query, as HTML says"))
   (let [{:keys [app]} (browser-app)
         b (testing/visit (testing/browser app) :get "/r3?kept=1")]
-    (is (= "qs:kept=1" (:body (:response b))) "control: no params leaves the path's query alone")))
+    (is (= "qs:kept=1" (:body (:response b))) "control: no params leaves the path's query alone"))
+  (let [{:keys [app]} (browser-app)
+        b  (testing/visit (testing/browser app) :get "/form")
+        b' (testing/visit b :post "/echo?kept=1" {"x" "1"})]
+    (is (= [{"kept" "1"} {"x" "1" "__anti-forgery-token" (:token b)} "/echo?kept=1"]
+           [(:query (edn/read-string (:body (:response b')))) (:form (edn/read-string (:body (:response b'))))
+            (:path b')])
+        "a POST's params stay in its body, and the query it was sent to is untouched")))
 
 (deftest put-patch-and-delete-carry-the-token-exactly-as-a-post-does
   (let [{:keys [app log]} (browser-app)

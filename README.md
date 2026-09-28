@@ -478,7 +478,10 @@ all.
 `wbi/init` is that start without the rest, for a host's tests or a `-main` of its own:
 `(wbi/init config)` or `(wbi/init config keys)` answers the system, and a key that throws
 halts what had started and throws an `ex-info` whose message is that key's own and
-whose data is empty.
+whose data is `{:key <the Integrant key that threw> :config-key <the path its own
+refusal named>}` — `:config-key` only when the key's exception carries one, as web-base's
+and db-base's refusals do. Nothing else of either exception's data is copied: Integrant's
+carries the key's resolved configuration, and the key's own may carry what it refused.
 
 ### Logging, for a library that plugs in
 

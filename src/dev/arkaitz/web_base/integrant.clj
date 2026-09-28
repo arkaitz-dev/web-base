@@ -89,14 +89,28 @@
   [^Throwable t]
   (message-of (or (ex-cause t) t)))
 
+(defn- failure-data
+  "What of Integrant's failure `e` may leave: which key threw, and the configuration key
+  its own exception names."
+  [e]
+  (let [k          (:key (ex-data e))
+        config-key (:config-key (ex-data (ex-cause e)))]
+    (cond-> {}
+      (some? config-key) (assoc :config-key config-key)
+      (some? k)          (assoc :key k))))
+
 (defn init
   "`ig/init` for a host's system, `ks` as Integrant takes them. When a key throws, what
   had started is halted — `ig/init` leaves a partial system behind and nobody else holds
-  it — and the failure is rethrown as an `ex-info` carrying a message and no data.
+  it — and the failure is rethrown as an `ex-info` whose data is `:key`, the Integrant
+  key that threw, and `:config-key`, when that key's own exception names one — a
+  web-base or db-base refusal does — and nothing else.
 
   The message is the failing key's own exception, just under Integrant's wrapper: never
-  Integrant's data, which carries the whole resolved configuration of that key, and not
-  the innermost cause either, which is a driver's and says whatever the driver says."
+  Integrant's data, which carries the whole resolved configuration of that key (`:value`,
+  `:system`), and not the innermost cause either, which is a driver's and says whatever
+  the driver says. Of the key's own data only `:config-key` is copied: the rest may be
+  what it refused, a password included."
   ([config] (init config (keys config)))
   ([config ks]
    (try
@@ -107,7 +121,8 @@
                        (try (ig/halt! partial) nil
                             (catch Throwable t
                               (str "; halting what had started also failed: " (key-failure t)))))]
-         (throw (ex-info (str "failed to start: " (key-failure e) halted) {})))))))
+         (throw (ex-info (str "failed to start: " (key-failure e) halted)
+                         (failure-data e))))))))
 
 (defn- start
   "`[:ok system]`, or `[:error message]` — `init` for `run!`, which reports a failure as

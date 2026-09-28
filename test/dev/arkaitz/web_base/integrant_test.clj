@@ -176,25 +176,34 @@
     (ig/halt! subset)
     (is (= [:first-started] @halted) "and what init returned is a system halt! can stop")))
 
-(deftest init-on-a-failing-key-throws-its-own-message-with-no-data-and-no-cause--halting-what-had-started
+(deftest init-on-a-failing-key-throws-its-own-message-naming-the-key-and-no-cause--halting-what-had-started
   (reset! halted [])
   (let [failing (init-failure "run-failing-config.edn")]
-    (is (= ["failed to start: the database refused the login" {} nil] (:triple failing))
-        "the failing key's own message, and neither Integrant's data nor a cause")
+    (is (= ["failed to start: the database refused the login" {:key :test.run/secretive} nil] (:triple failing))
+        "the failing key's own message and its name, and neither Integrant's data nor a cause")
     (is (= [:first-started] @halted) "the key that had started was halted, not leaked")
     (is (not (str/includes? (:whole failing) "S3CRET")) "the configuration's secret is nowhere in the throwable"))
   (let [wrapping (init-failure "run-wrapping-config.edn")]
-    (is (= ["failed to start: db-base: the database refused the login" {} nil] (:triple wrapping))
+    (is (= ["failed to start: db-base: the database refused the login" {:key :test.run/wrapping} nil] (:triple wrapping))
         "the key's own sentence, one link under Integrant's wrapper — not the driver's beneath it")
     (is (not (str/includes? (:whole wrapping) "S3CRET")) "whose words carry the secret"))
-  (is (= ["failed to start: java.lang.NullPointerException" {} nil] (:triple (init-failure "run-silent-config.edn")))
+  (is (= ["failed to start: java.lang.NullPointerException" {:key :test.run/silent} nil]
+         (:triple (init-failure "run-silent-config.edn")))
       "an exception with no message is named by its class")
   (let [bad-halt (init-failure "run-bad-halt-config.edn")]
     (is (= [(str "failed to start: the database refused the login;"
-                 " halting what had started also failed: could not close the pool") {} nil]
+                 " halting what had started also failed: could not close the pool") {:key :test.run/secretive} nil]
            (:triple bad-halt))
         "a partial system that cannot be halted says so, instead of escaping as a second exception")
     (is (not (str/includes? (:whole bad-halt) "S3CRET"))))
+  (reset! halted [])
+  (let [refusing (init-failure "run-refusing-config.edn")]
+    (is (= ["failed to start: web-base: session :key must be 16 bytes"
+            {:config-key [:session :key] :key :test.run/refusing} nil]
+           (:triple refusing))
+        "a key's own :config-key is passed on beside the key's name, and nothing else of its data")
+    (is (= [:first-started] @halted) "the key that had started was halted")
+    (is (not (str/includes? (:whole refusing) "S3CRET")) "the value it refused is not"))
   (let [config (wbi/read-string (slurp (clojure.java.io/resource "run-failing-config.edn")))]
     (is (= [:error "failed to start: the database refused the login"] (start config))
         "run!'s reading of it is init's message, one line")))

@@ -30,3 +30,8 @@
 ;; `ig/halt!`, and the halt then fails on the key after it.
 (defmethod ig/init-key :test.run/marker-after [_ {:keys [path]}] path)
 (defmethod ig/halt-key! :test.run/marker-after [_ path] (spit path "halted"))
+
+;; A refusal of the web-base and db-base kind: a :config-key to pass on, beside the value
+;; it refused, which must not be.
+(defmethod ig/init-key :test.run/refusing [_ {:keys [password]}]
+  (throw (ex-info "web-base: session :key must be 16 bytes" {:config-key [:session :key] :value password})))

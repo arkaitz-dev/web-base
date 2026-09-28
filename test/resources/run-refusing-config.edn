@@ -1,0 +1,4 @@
+;; Fixture: a key refusing its configuration by name, holding the secret it refused.
+{:test.run/first    {}
+ :test.run/refusing {:first    #ig/ref :test.run/first
+                     :password "S3CRET-7f3a"}}

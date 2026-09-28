@@ -232,4 +232,19 @@
             "a swap gets the handler's fragment, 200, and no redirect"))
       (let [r (:response (testing/visit b :post "/both" {"name" "fine"} {:follow? false}))]
         (is (= [303 "/" ""] [(:status r) (get-in r [:headers "Location"]) (:body r)])
-            "a navigation gets a 303 to the location")))))
+            "a navigation gets a 303 to the location")))
+    (testing "an htmx request for the whole document — hx-boost — is a navigation"
+      (let [whole (fn [params]
+                    (app {:request-method :post :uri "/both" :scheme :http :server-name "localhost"
+                          :server-port 80 :remote-addr "127.0.0.1"
+                          :headers {"host" "localhost" "hx-request" "true" "hx-request-type" "full"
+                                    "x-csrf-token" token
+                                    "cookie" (str/join "; " (map (fn [[k v]] (str k "=" v)) (:jar b)))
+                                    "content-type" "application/x-www-form-urlencoded"}
+                          :body (java.io.ByteArrayInputStream.
+                                 (.getBytes ^String (str/join "&" (map (fn [[k v]] (str k "=" v)) params)) "UTF-8"))}))]
+        (is (= 422 (:status (whole {"name" "x"}))) "witness: the request reached the form and was refused")
+        (is (str/starts-with? (str (:body (whole {"name" "x"}))) "<!DOCTYPE html>")
+            "refused, it gets the whole page, as a navigation does — never a bare fragment as the document")
+        (is (= [303 "/"] ((juxt :status #(get-in % [:headers "Location"])) (whole {"name" "fine"})))
+            "done, it gets the 303")))))

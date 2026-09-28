@@ -145,8 +145,9 @@
    [:security]        #{:frame-options :csp :hsts :proxy?}
    [:security :hsts]  #{:max-age :include-subdomains?}
    [:i18n]            #{:dict :default-locale :locale-fn}
+   ;; `:paths` too: reitit reads it though its docstring does not list it.
    [:static]          #{:parameter :root :path :loader :index-files :index-redirect?
-                        :canonicalize-uris? :not-found-handler :mime-types :allow-symlinks?}})
+                        :canonicalize-uris? :not-found-handler :mime-types :allow-symlinks? :paths}})
 
 (defn- refuse-unknown-keys!
   "Sorted by printed form so keys of mixed types cannot make the refusal throw."

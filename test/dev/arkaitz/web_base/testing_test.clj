@@ -145,6 +145,7 @@
                           ["/me" {:get (fn [r] {:status 200 :body (pr-str (dissoc (:session r) :ring.middleware.anti-forgery/anti-forgery-token))})}]
                           ["/echo" (let [echo (fn [r] {:status 200
                                                        :body   (pr-str {:form   (:form-params r)
+                                                        :query  (:query-params r)
                                                                         :hdr    (get-in r [:headers "x-csrf-token"])
                                                                         :addr   (:remote-addr r)
                                                                         :method (:request-method r)})})]
@@ -362,18 +363,25 @@
         b (testing/visit (testing/browser app) :get "/form")]
     (is (string? (:token b)) "witness: the form page gave the browser a token")
     (doseq [method [:put :patch :delete]]
-      (is (= 403 (:status (:response (testing/visit (assoc b :token "wrong") method "/echo" {:x "1"}))))
+      (is (= 403 (:status (:response (testing/visit (assoc b :token "wrong") method "/echo" {:x "1"} {:htmx? true}))))
           (str "control: CSRF guards " method ", so the token below is what lets it through"))
-      (let [r (:response (testing/visit b method "/echo" {:x "1"}))]
-        (is (= [200 {:form {"x" "1" "__anti-forgery-token" (:token b)} :hdr nil :addr "127.0.0.1" :method method}]
-               [(:status r) (edn/read-string (:body r))])
-            (str method " sends the form with the token as its hidden field")))
       (let [r (:response (testing/visit b method "/echo" {:x "1"} {:htmx? true}))]
-        (is (= [200 {:form {"x" "1"} :hdr (:token b) :addr "127.0.0.1" :method method}]
+        ;; Where the htmx the base ships puts them: DELETE moves the form into the URL
+        ;; and sends no body; PUT and PATCH send it as the body.
+        (is (= [200 {:form (if (= :delete method) {} {"x" "1"}) :query (if (= :delete method) {"x" "1"} {})
+                     :hdr (:token b) :addr "127.0.0.1" :method method}]
                [(:status r) (edn/read-string (:body r))])
-            (str method " under htmx sends the token as the header and not in the form")))
+            (str method " under htmx sends the token as the header and its params where htmx puts them")))
       (reset! log [])
-      (let [e (try (testing/visit (testing/browser app) method "/echo" {:x "1"}) nil
+      (let [e (try (testing/visit b method "/echo" {:x "1"}) nil
+                   (catch clojure.lang.ExceptionInfo e e))
+            m ({:put "PUT" :patch "PATCH" :delete "DELETE"} method)]
+        (is (= [(str "web-base: a browser form sends only GET and POST — a " m " to /echo is htmx's; pass {:htmx? true}")
+                {:path "/echo" :method method}]
+               [(ex-message e) (ex-data e)])
+            (str method " without htmx throws: no browser form can send it"))
+        (is (= [] @log) (str method ": before anything was sent")))
+      (let [e (try (testing/visit (testing/browser app) method "/echo" {:x "1"} {:htmx? true}) nil
                    (catch clojure.lang.ExceptionInfo e e))]
         (is (= [(str "web-base: a " ({:put "PUT" :patch "PATCH" :delete "DELETE"} method) " to /echo with no CSRF token"
                      " — GET a page that carries one first")

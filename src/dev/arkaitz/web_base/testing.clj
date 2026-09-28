@@ -124,14 +124,26 @@
     [(if (str/blank? uri) "/" uri) qs]))
 
 (def ^:private unsafe?
-  "The methods CSRF protects, and so the ones that carry the token and a form body."
+  "The methods CSRF protects, and so the ones that carry the token."
   #{:post :put :patch :delete})
+
+(def ^:private params-in-query?
+  "The methods whose parameters travel in the URL: a browser form's GET, and htmx's GET
+  and DELETE, which move the form into the query string and send no body."
+  #{:get :delete})
+
+(def ^:private htmx-only?
+  "The methods only htmx sends: a browser form knows GET and POST."
+  #{:put :patch :delete})
 
 (defn- request-of
   [{:keys [jar token]} method path params {:keys [htmx? remote-addr]}]
   (let [[uri qs] (split-path path)
+        qs       (if (and (params-in-query? method) (seq params))
+                   (str/join "&" (remove str/blank? [qs (form-body params)]))
+                   qs)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
-        body     (when (unsafe? method)
+        body     (when (and (unsafe? method) (not (params-in-query? method)))
                    (form-body (cond-> (vec params)
                                 (not htmx?) (conj ["__anti-forgery-token" token]))))
         bytes    (some-> ^String body (.getBytes "UTF-8"))]
@@ -167,12 +179,15 @@
   `path` with form `params`, holding the final `:response` and, as `:path`, where it
   landed — the address bar, with its query string, after every redirect was followed.
 
-  - A POST, PUT, PATCH or DELETE sends `params` as a form body and carries the CSRF
-    token of the last page that had one, as the hidden field a form would send — or,
-    with `{:htmx? true}`, as the header the shell makes htmx send, with the headers of a
-    swap. One with no token known throws: a 403 that looked like the application's
-    fault is the failure it replaces. After a login the session, and with it the token,
-    is new — GET a page before the next one.
+  - `params` go where a browser puts them: in the query string for a GET, and for a
+    DELETE, which htmx sends with no body; as a form body for a POST, PUT or PATCH.
+  - A POST, PUT, PATCH or DELETE carries the CSRF token of the last page that had one,
+    as the hidden field a form would send — or, with `{:htmx? true}`, as the header the
+    shell makes htmx send, with the headers of a swap. A PUT, PATCH or DELETE without
+    `{:htmx? true}` throws, because no browser form can send one. One with no token
+    known throws: a 403 that looked like the application's fault is the failure it
+    replaces. After a login the session, and with it the token, is new — GET a page
+    before the next one.
   - A 301, 302 or 303 is followed as a GET through the same jar, up to ten times; an
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
@@ -187,6 +202,10 @@
   ([b method path] (visit b method path nil nil))
   ([b method path params] (visit b method path params nil))
   ([b method path params opts]
+   (when (and (htmx-only? method) (not (:htmx? opts)))
+     (throw (ex-info (str "web-base: a browser form sends only GET and POST — a "
+                          (.toUpperCase (name method) Locale/ROOT) " to " path " is htmx's; pass {:htmx? true}")
+                     {:path path :method method})))
    (when (and (unsafe? method) (not (:token b)))
      (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
                           " with no CSRF token — GET a page that carries one first")

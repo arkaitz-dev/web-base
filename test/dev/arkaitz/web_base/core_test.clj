@@ -74,7 +74,8 @@
    :i18n     {:dict {:en {}} :default-locale :en :locale-fn (constantly nil)}
    :static   {:root "public" :path "/" :parameter :path :loader (clojure.lang.RT/baseLoader)
               :index-files ["index.html"] :index-redirect? false :canonicalize-uris? true
-              :not-found-handler (constantly nil) :mime-types {} :allow-symlinks? false}})
+              :not-found-handler (constantly nil) :mime-types {} :allow-symlinks? false
+              :paths (constantly nil)}})
 
 (deftest an-unknown-key-inside-a-map-the-base-owns-is-refused-naming-its-path
   (let [attempt (fn [cfg] (try (wb/handler cfg) ::built
@@ -87,7 +88,7 @@
                             [[:security :hsts :max-aeg] "[:include-subdomains? :max-age]"]
                             [[:i18n :default-lcoale] "[:default-locale :dict :locale-fn]"]
                             [[:static :roto] (str "[:allow-symlinks? :canonicalize-uris? :index-files :index-redirect?"
-                                                  " :loader :mime-types :not-found-handler :parameter :path :root]")]]]
+                                                  " :loader :mime-types :not-found-handler :parameter :path :paths :root]")]]]
       (is (= [(str "web-base: unknown key [" (pr-str (peek path)) "] in " (pr-str (pop path)) " — it takes " allowed)
               {:config-key path}]
              (attempt (assoc-in base path 1)))

@@ -105,6 +105,31 @@
   (when (nil? (get config k))
     (throw (ex-info (str "web-base config needs " k) {:config-key [k]}))))
 
+(def ^:private owned-keys
+  "The keys of every map inside the config that the base reads, by path. The top level
+  stays open — its unknown keys are the host's — but inside these a key nobody reads is
+  a setting the host believes is in force: `:hts` for `:hsts` would otherwise serve
+  without HSTS and say nothing. `:static` is reitit 0.10's `create-resource-handler`
+  options. `:session`'s `:cookie-attrs` is Ring's, which refuses an unknown attribute on
+  its own, at the first cookie it writes."
+  {[:session]         #{:key :store :cookie-attrs :cookie-name}
+   [:security]        #{:frame-options :csp :hsts :proxy?}
+   [:security :hsts]  #{:max-age :include-subdomains?}
+   [:i18n]            #{:dict :default-locale :locale-fn}
+   [:static]          #{:parameter :root :path :loader :index-files :index-redirect?
+                        :canonicalize-uris? :not-found-handler :mime-types :allow-symlinks?}})
+
+(defn- refuse-unknown-keys!
+  "Sorted by printed form so keys of mixed types cannot make the refusal throw."
+  [config]
+  (doseq [[path allowed] owned-keys
+          :let [m (get-in config path)]
+          :when (map? m)]
+    (when-let [unknown (not-empty (sort-by pr-str (remove allowed (keys m))))]
+      (throw (ex-info (str "web-base: unknown key" (when (next unknown) "s") " " (pr-str (vec unknown))
+                           " in " (pr-str path) " — it takes " (pr-str (vec (sort allowed))))
+                      {:config-key (conj path (first unknown))})))))
+
 (def ^:private base-assets
   (ring/create-resource-handler {:path "/wb/" :root "dev/arkaitz/web_base/public"}))
 
@@ -177,12 +202,15 @@
                   handler is a function or a var, and a path one of :routes also
                   matches is refused (optional)
 
-  Unknown keys are the host's own business. Every failure of a required or
-  malformed value is raised here, at construction."
+  Unknown keys are the host's own business. Inside the maps the base owns —
+  `:session`, `:security` and its `:hsts`, `:i18n`, `:static` — an unknown key is
+  refused, naming its path. Every failure of a required or malformed value is raised
+  here, at construction."
   [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless]
     :as   config}]
   (require-key! config :routes)
   (require-key! config :session)
+  (refuse-unknown-keys! config)
   (validate-sessionless! sessionless)
   ;; Explicit nils — a config map assembled from an absent setting — must not
   ;; switch protection off or leave a function unbound.

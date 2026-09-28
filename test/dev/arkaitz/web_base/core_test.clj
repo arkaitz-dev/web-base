@@ -66,6 +66,37 @@
            (attempt {:routes [["/p" {:wb/gate wb/subject-present? :get identity}]] :session {:key KEY}}))
         "a collaborator's construction-time check is reached")))
 
+(def ^:private every-owned-key
+  "Every key the base reads inside each map it owns, each with a value it accepts."
+  {:session  {:key KEY :cookie-attrs {:secure false} :cookie-name "sid"}
+   :security {:frame-options "SAMEORIGIN" :csp "default-src 'self'"
+              :hsts {:max-age 1 :include-subdomains? true} :proxy? true}
+   :i18n     {:dict {:en {}} :default-locale :en :locale-fn (constantly nil)}
+   :static   {:root "public" :path "/" :parameter :path :loader (clojure.lang.RT/baseLoader)
+              :index-files ["index.html"] :index-redirect? false :canonicalize-uris? true
+              :not-found-handler (constantly nil) :mime-types {} :allow-symlinks? false}})
+
+(deftest an-unknown-key-inside-a-map-the-base-owns-is-refused-naming-its-path
+  (let [attempt (fn [cfg] (try (wb/handler cfg) ::built
+                               (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
+        base    (merge {:routes []} every-owned-key)]
+    (is (= ::built (attempt base)) "control: every key the base reads is accepted, in every map it owns")
+    (is (= ::built (attempt (assoc base :whatever-unknown 1))) "the top level stays the host's")
+    (doseq [[path allowed] [[[:session :kye] "[:cookie-attrs :cookie-name :key :store]"]
+                            [[:security :hts] "[:csp :frame-options :hsts :proxy?]"]
+                            [[:security :hsts :max-aeg] "[:include-subdomains? :max-age]"]
+                            [[:i18n :default-lcoale] "[:default-locale :dict :locale-fn]"]
+                            [[:static :roto] (str "[:allow-symlinks? :canonicalize-uris? :index-files :index-redirect?"
+                                                  " :loader :mime-types :not-found-handler :parameter :path :root]")]]]
+      (is (= [(str "web-base: unknown key [" (pr-str (peek path)) "] in " (pr-str (pop path)) " — it takes " allowed)
+              {:config-key path}]
+             (attempt (assoc-in base path 1)))
+          (str "refused: " (pr-str path))))
+    (is (= ["web-base: unknown keys [:a :b] in [:security] — it takes [:csp :frame-options :hsts :proxy?]"
+            {:config-key [:security :a]}]
+           (attempt (update base :security assoc :b 1 :a 2)))
+        "several are all named, and the first sorted is the one in the data")))
+
 (deftest assembled-login-sets-session-and-gate-admits-the-cookie-refuses-without-it
   (let [app   (wb/handler (config :csrf false))
         login (app (mock/request :post "/login"))]

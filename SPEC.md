@@ -164,6 +164,15 @@ and what `:wb/form` holds; the base only owns getting the page back, with its ga
 layouts and CSRF token, which is the part every host would otherwise rebuild. The 422
 relies on htmx 4, which swaps every response but 204 and 304 — htmx 2 swapped no 4xx.
 
+*Amended for 0.8.0, 2026-09-28 — a breaking change:* **an unknown key inside a map the
+base owns is refused at construction**, naming its path (`{:config-key [:security
+:hts]}`). Those maps are `:session`, `:security` with its `:hsts`, `:i18n` and `:static`;
+a key nobody reads there is a setting the host believes is in force, and the cheapest
+misspelling — `:hts` — served without HSTS and without a word. The top level stays open,
+because a host assembles its config from wider maps of its own and its unknown keys are
+its business. `:session`'s `:cookie-attrs` is Ring's map, which Ring already refuses to
+write with an unknown attribute.
+
 ## 8 · Its own harness
 
 web-base ships a **tiny demo application** that uses nothing but web-base: a couple of

@@ -194,6 +194,14 @@ on demand.
 
 Every malformed or missing required value fails at construction, naming the key.
 
+Unknown keys at the top level are yours — the base ignores them. **Inside the maps the
+base owns they are refused** (since 0.8.0, a breaking change): `:session`, `:security`
+and its `:hsts`, `:i18n` and `:static` each take exactly the keys above (`:static` takes
+reitit's `create-resource-handler` options), and anything else fails at construction as
+`{:config-key [:security :hts]}`, because a misspelt `:hts` would otherwise serve without
+HSTS and say nothing. `:cookie-attrs` is Ring's map and Ring refuses an unknown attribute
+itself, at the first cookie it writes.
+
 ### The wiring order
 
 It is the product, so it is written down, outermost first:

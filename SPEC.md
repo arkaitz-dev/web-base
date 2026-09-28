@@ -163,6 +163,9 @@ with 422 for the handler that renders its own fragment. The host decides what is
 and what `:wb/form` holds; the base only owns getting the page back, with its gate,
 layouts and CSRF token, which is the part every host would otherwise rebuild. The 422
 relies on htmx 4, which swaps every response but 204 and 304 — htmx 2 swapped no 4xx.
+*Amended for 0.8.0:* every host wrote the same branch for a form that works with and
+without JavaScript — the handler's fragment for a swap, the page for a navigation — so the
+base names both answers, `refuse-form` and `form-done`. They still validate nothing.
 
 *Amended for 0.8.0, 2026-09-28 — a breaking change:* **an unknown key inside a map the
 base owns is refused at construction**, naming its path (`{:config-key [:security

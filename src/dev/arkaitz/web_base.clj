@@ -27,9 +27,11 @@
   render on their own."
   (:require [dev.arkaitz.web-base.error :as error]
             [dev.arkaitz.web-base.gate :as gate]
+            [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.i18n :as i18n]
             [dev.arkaitz.web-base.log :as log]
             [dev.arkaitz.web-base.render :as render]
+            [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.server :as server]
             [dev.arkaitz.web-base.session :as session]
@@ -62,9 +64,11 @@
   place. Views read `(:wb/form request)`, whose shape is the host's.
 
   A response the page answers with a redirect, an `HX-Redirect` or any status other
-  than 200 is returned as it is. An htmx form that swaps only itself wants
-  `response/unprocessable` with its own fragment instead, since the page's GET would
-  render the whole page's content into the form's target.
+  than 200 is returned as it is.
+
+  On an htmx request the page renders as any GET does under htmx: its content without
+  its layouts, which lands inside whatever the form targeted. A form that swaps only
+  itself, and still works without JavaScript, answers through `refuse-form` instead.
 
   Throws when `path` has no `:get` route, and when the request already carries
   `:wb/form` — a page that re-rendered into itself would never stop. Not a validation
@@ -100,6 +104,31 @@
                (not (contains? (:headers response) "HX-Redirect")))
         (assoc response :status 422)
         response))))
+
+(defn refuse-form
+  "The answer to a form the host refused, for a page that works with and without
+  JavaScript: an htmx swap gets `fragment` — the form with its errors, drawn by the
+  handler — as a 422 (`response/unprocessable`), and a navigation gets the page at
+  `path` rendered again with `form` under `:wb/form` (`rerender`, whose rules apply,
+  `path` never taken from the request among them).
+
+    (if-let [errors (validate values)]
+      (wb/refuse-form request \"/things\" {:values values :errors errors}
+                      (thing-form request values errors))
+      (wb/form-done request \"/things\" (thing-row saved)))"
+  [request path form fragment]
+  (if (htmx/partial-request? request)
+    (response/unprocessable fragment)
+    (rerender request path form)))
+
+(defn form-done
+  "The answer to a form the host accepted, for a page that works with and without
+  JavaScript: an htmx swap gets `fragment` with a 200, and a navigation a 303 to
+  `location` (`response/see-other`), so a reload never posts twice."
+  [request location fragment]
+  (if (htmx/partial-request? request)
+    (response/ok fragment)
+    (response/see-other location)))
 
 (defn- require-key! [config k]
   (when (nil? (get config k))

@@ -74,6 +74,12 @@
      ["/loop" {:get (fn [r] (swap! runs inc) (wb/rerender r "/loop" (get-in r [:params "form"])))}]
      ["/kick" {:post (fn [r] (wb/rerender r "/loop" (when (= "some" (get-in r [:form-params "form"])) {})))}]
      ["/only-post" {:post (fn [_] {:status 200 :body "only"})}]
+     ;; A form that works with and without JavaScript: one handler, both answers.
+     ["/both" {:post (fn [r] (let [n (get-in r [:form-params "name"])]
+                               (if (= "fine" n)
+                                 (wb/form-done r "/" [:li#saved n])
+                                 (wb/refuse-form r "/things/7?q=z" {:values {:name n} :errors {:name "bad"}}
+                                                 [:form#f "refused " n]))))}]
      ["/frag" {:post (fn [_] (response/unprocessable [:form#f "bad"]))}]
      ["/frag2" {:wb/layouts [layout section]
                 :post (fn [_] (response/unprocessable [:form#f "bad"] {:slots {:title "Nope"} :height 1}))}]]}))
@@ -204,3 +210,26 @@
       (is (str/starts-with? (:body r) "<div id=\"things-page\">")
           "a rerender under htmx renders the page's whole content — why a form that swaps only itself wants unprocessable")
       (is (not (str/includes? (:body r) "layout")) "without the layout"))))
+
+(deftest a-form-for-both-answers-a-swap-with-its-fragment-and-a-navigation-with-the-page
+  (let [{:keys [app]} (fixture)
+        b     (ready app)
+        token (:token b)]
+    (is (string? token) "witness: a page gave the browser a token")
+    (testing "refused"
+      (let [r (:response (testing/visit b :post "/both" {"name" "x"} {:htmx? true}))]
+        (is (= [422 "<form id=\"f\">refused x</form>"] [(:status r) (:body r)])
+            "a swap gets the handler's fragment alone, 422 — not the page's content"))
+      (let [r (:response (testing/visit b :post "/both" {"name" "x"}))]
+        (is (= [422 (str "<!DOCTYPE html>\n<html><body><div id=\"layout\"><div id=\"things-page\"><form>"
+                         "<input name=\"__anti-forgery-token\" type=\"hidden\" value=\"" token "\">"
+                         "<input name=\"name\" value=\"x\"><p class=\"err\">bad</p><i>z/7</i></form></div></div></body></html>")]
+               [(:status r) (:body r)])
+            "a navigation gets the page's own GET, whole, with the form it was handed")))
+    (testing "done"
+      (let [r (:response (testing/visit b :post "/both" {"name" "fine"} {:htmx? true}))]
+        (is (= [200 "<li id=\"saved\">fine</li>" nil] [(:status r) (:body r) (get-in r [:headers "Location"])])
+            "a swap gets the handler's fragment, 200, and no redirect"))
+      (let [r (:response (testing/visit b :post "/both" {"name" "fine"} {:follow? false}))]
+        (is (= [303 "/" ""] [(:status r) (get-in r [:headers "Location"]) (:body r)])
+            "a navigation gets a 303 to the location")))))

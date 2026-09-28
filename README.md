@@ -283,10 +283,27 @@ handler** — with malli:
 included — with `{:values … :errors …}` under `:wb/form` on the request and status 422,
 so the GET handler that draws the form draws it refused too, and no redirect loses what
 was typed. Give the form the same path for GET and POST and a reload does the sensible
-thing. A form that swaps only itself with htmx answers its own fragment with
-`response/unprocessable` instead, because the page's GET would render the whole page's
-content into the form's target. Both rely on htmx 4 swapping a 422; under htmx 2 a host
-would have to allow it in `htmx.config.responseHandling`.
+thing.
+
+On an htmx request `rerender` renders the page as any GET renders under htmx: its content
+without its layouts, which lands inside whatever the form targeted — the whole page's
+content inside the form, for a form that swaps only itself. Such a form, when it must also
+work without JavaScript, answers through the two helpers instead of branching by hand:
+
+```clojure
+(defn save [request]
+  (let [values (select-keys (:form-params request) ["name"])]
+    (if-let [errors (validate values)]
+      (wb/refuse-form request "/things" {:values values :errors errors}
+                      (thing-form request values errors))   ; the form with its errors
+      (wb/form-done request "/things" (thing-row (save! values))))))
+```
+
+`refuse-form` answers an htmx swap with that fragment as a 422
+(`response/unprocessable`) and a navigation with `rerender` of the page's GET; `form-done`
+answers a swap with its fragment, 200, and a navigation with a 303 to the location. All of
+this relies on htmx 4 swapping a 422; under htmx 2 a host would have to allow it in
+`htmx.config.responseHandling`.
 
 ### Internationalisation
 

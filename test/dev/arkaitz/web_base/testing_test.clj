@@ -14,7 +14,8 @@
             [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.shell :as shell]
             [dev.arkaitz.web-base.testing :as testing]
-            [ring.mock.request :as mock]))
+            [ring.mock.request :as mock])
+  (:import [java.util Locale]))
 
 (def ^:private KEY "AAECAwQFBgcICQoLDA0ODw==")
 (def ^:private TOKEN "tok/ABC+123=")
@@ -415,3 +416,83 @@
                [(ex-message e) (ex-data e)])
             (str method " with no token known throws, naming why"))
         (is (= [] @log) (str method ": before anything was sent"))))))
+
+;; A chain of every redirect status `visit` follows, ending on a page whose locale the
+;; real i18n layer negotiates: what reaches a handler is recorded per hop, by the literal
+;; lower-case name Ring delivers, so a header sent only once or in the wrong case shows.
+(defn- header-app []
+  (let [log (atom [])
+        app (wb/handler
+             {:session {:key KEY}
+              :csrf    false
+              :i18n    {:dict {:en {:hi "hi"} :es {:hi "hola"}} :default-locale :en}
+              :routes  [["/r0" {:get (fn [_] {:status 301 :headers {"Location" "http://localhost/r1"} :body ""})}]
+                        ["/r1" {:get (fn [_] {:status 303 :headers {"Location" "/r2"} :body ""})}]
+                        ["/r2" {:get (fn [_] {:status 302 :headers {"location" "/r3"} :body ""})}]
+                        ["/r3" {:get (fn [r] {:status 200 :body (pr-str {:locale (:wb/locale r)
+                                                                          :al     (get-in r [:headers "accept-language"])})})}]]})]
+    {:log log
+     :app (fn [r]
+            (swap! log conj [(:request-method r) (:uri r)
+                             (get-in r [:headers "accept-language"]) (get-in r [:headers "x-client-id"])])
+            (app r))}))
+
+(deftest visit-headers-reach-every-request-of-a-redirect-chain-lower-cased--and-i18n-reads-them
+  (let [{:keys [app log]} (header-app)
+        chain (fn [opts] (reset! log []) (testing/visit (testing/browser app) :get "/r0" nil opts))]
+    (let [b (chain nil)]
+      (is (= [[:get "/r0" nil nil] [:get "/r1" nil nil] [:get "/r2" nil nil] [:get "/r3" nil nil]] @log)
+          "control: without :headers no hop carries either header")
+      (is (= {:locale :en :al nil} (edn/read-string (:body (:response b))))
+          "control: without the header i18n falls to the default, so :es below is the header's doing"))
+    (let [b (chain {:headers {"Accept-Language" "es" :X-Client-Id "c1"}})]
+      (is (= [[:get "/r0" "es" "c1"] [:get "/r1" "es" "c1"] [:get "/r2" "es" "c1"] [:get "/r3" "es" "c1"]] @log)
+          "every hop, redirects followed included, carries both headers under their lower-case names")
+      (is (= {:locale :es :al "es"} (edn/read-string (:body (:response b))))
+          "and the base's i18n negotiated the language from it"))
+    (let [default (Locale/getDefault)]
+      (try
+        (Locale/setDefault (Locale. "tr" "TR"))
+        (is (= "x-clıent-ıd" (.toLowerCase "X-CLIENT-ID")) "witness: the default locale lower-cases I to a dotless ı")
+        (chain {:headers {"X-CLIENT-ID" "c1"}})
+        (is (= [[:get "/r0" nil "c1"] [:get "/r1" nil "c1"] [:get "/r2" nil "c1"] [:get "/r3" nil "c1"]] @log)
+            "under a Turkish default locale the name is still x-client-id")
+        (finally (Locale/setDefault default))))))
+
+(deftest visit-refuses-each-header-it-owns-by-name-before-sending--and-a-foreign-one-in-any-case-goes-through
+  (let [{:keys [app log]} (browser-app)
+        owned #{"host" "cookie" "content-type" "content-length" "x-csrf-token" "hx-request" "hx-request-type"}
+        refusal (fn [b method headers opts]
+                  (reset! log [])
+                  (let [e (try (testing/visit b method "/echo" {:x "1"} (assoc opts :headers headers)) nil
+                               (catch clojure.lang.ExceptionInfo e e))]
+                    [(ex-message e) (ex-data e) (count @log)]))
+        expected (fn [h] [(str "web-base: visit writes the " h " header itself — pass the jar, the token or"
+                               " {:htmx? true} instead of setting it")
+                          {:path "/echo" :header h} 0])
+        b (testing/visit (testing/browser app) :get "/form")]
+    (is (= owned (into #{"host" "cookie" "content-type" "content-length" (str/lower-case security/csrf-header)}
+                       (keys htmx/fragment-headers)))
+        "witness: the list below is every header visit writes, read from where visit reads it")
+    (is (string? (:token b)) "witness: the browser holds a token, so no refusal below is the missing-token one")
+    (doseq [h (sort owned)
+            :let [spelling ({"host" "Host" "cookie" "Cookie" "content-type" "Content-Type"
+                             "content-length" :Content-Length "x-csrf-token" "X-CSRF-Token"
+                             "hx-request" "HX-Request" "hx-request-type" "Hx-Request-Type"} h)]]
+      (is (= (expected h) (refusal b :post {spelling "x"} nil))
+          (str spelling ": refused by its lower-case name, before anything was sent")))
+    (is (= (expected "x-csrf-token") (refusal b :post {"X-CSRF-Token" "forged"} {:htmx? true}))
+        "a swap's own header cannot be set either, even when visit would write it")
+    (is (= ["web-base: visit was given the accept header twice, in different cases" {:path "/echo" :header "accept"} 0]
+           (let [e (do (reset! log [])
+                       (try (testing/visit b :post "/echo" {:x "1"} {:headers {"X-A" "1" "x-a" "2" "Accept" "a" "accept" "b"}}) nil
+                            (catch clojure.lang.ExceptionInfo e e)))]
+             [(ex-message e) (ex-data e) (count @log)]))
+        "one header in two cases is refused, the first in sort order named: which one a map kept would be chance")
+    (let [seen (atom [])
+          b    (assoc b :handler (fn [r] (swap! seen conj [(:request-method r) (get-in r [:headers "x-foreign"])]) (app r)))]
+      (is (= 200 (:status (:response (testing/visit b :post "/echo" {:x "1"} {:headers {"X-Foreign" "1"}}))))
+          "control: a header visit does not own goes through, the POST answered")
+      (is (= 200 (:status (:response (testing/visit b :put "/echo" {:x "1"} {:htmx? true :headers {"X-Foreign" "2"}}))))
+          "and a swap's PUT answered")
+      (is (= [[:post "1"] [:put "2"]] @seen) "each carrying its header, a form's POST and a swap alike"))))

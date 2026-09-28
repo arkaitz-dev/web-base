@@ -147,8 +147,30 @@
   "The methods only htmx sends: a browser form knows GET and POST."
   #{:put :patch :delete})
 
+(def ^:private owned-headers
+  "The headers `visit` writes itself: a test that set one would fake the jar, the
+  token or the swap instead of exercising them."
+  (into #{"host" "cookie" "content-type" "content-length" (lower security/csrf-header)}
+        (keys htmx/fragment-headers)))
+
+(defn- extra-headers
+  "`headers` with lower-cased names, refused naming the first one `visit` owns, or the
+  first name, in sort order, given twice in different cases — which spelling a map kept
+  would be chance."
+  [path headers]
+  (let [lowered (into {} (map (fn [[k v]] [(lower (name k)) v])) headers)]
+    (when (< (count lowered) (count headers))
+      (let [twice (first (sort (for [[k n] (frequencies (map #(lower (name %)) (keys headers))) :when (< 1 n)] k)))]
+        (throw (ex-info (str "web-base: visit was given the " twice " header twice, in different cases")
+                        {:path path :header twice}))))
+    (when-let [owned (first (filter owned-headers (sort (keys lowered))))]
+      (throw (ex-info (str "web-base: visit writes the " owned " header itself — "
+                           "pass the jar, the token or {:htmx? true} instead of setting it")
+                      {:path path :header owned})))
+    lowered))
+
 (defn- request-of
-  [{:keys [jar token]} method path params {:keys [htmx? remote-addr]}]
+  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers]}]
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
         body     (when (and (unsafe? method) (not (params-in-query? method)))
@@ -162,7 +184,7 @@
              :server-port    80
              :remote-addr    (or remote-addr "127.0.0.1")
              :protocol       "HTTP/1.1"
-             :headers        (cond-> {"host" "localhost"}
+             :headers        (cond-> (assoc headers "host" "localhost")
                                cookie (assoc "cookie" cookie)
                                htmx?  (merge htmx/fragment-headers)
                                (and htmx? token) (assoc (lower security/csrf-header) token))}
@@ -200,6 +222,10 @@
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
   - `{:remote-addr \"…\"}` sets the source address, for anything keyed by it.
+  - `{:headers {\"accept-language\" \"es\"}}` adds headers to every request, redirects
+    followed included, as a browser keeps sending its own. Names are lower-cased; one
+    `visit` writes itself — host, cookie, content-type, content-length, the CSRF header
+    or a swap's — throws, because setting it would fake what the test exercises.
   - `{:follow? false}` sends one request and follows nothing, for a test that asks who
     answered: a handler that redirects to a gated page lands on the login page exactly
     as the gate would. The jar still takes what the response set.
@@ -218,19 +244,20 @@
      (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
                           " with no CSRF token — GET a page that carries one first")
                      {:path path})))
-   (loop [b b method method path (with-params method path params) params params hops 0]
-     (let [response ((:handler b) (request-of b method path params opts))
-           b        (assoc b
-                           :response response
-                           :path (let [[uri qs] (split-path path)] (cond-> uri qs (str "?" qs)))
-                           :jar (into {} (remove (comp nil? val)) (merge (:jar b) (cookies response)))
-                           :token (or (csrf-token response) (:token b)))]
-       (if (and (not (false? (:follow? opts))) (redirect? (:status response)) (location response))
-         (if (< hops max-redirects)
-           (recur b :get (location response) nil (inc hops))
-           (throw (ex-info (str "web-base: more than " max-redirects " redirects from " path)
-                           {:path path})))
-         b)))))
+   (let [opts (assoc opts :headers (extra-headers path (:headers opts)))]
+     (loop [b b method method path (with-params method path params) params params hops 0]
+       (let [response ((:handler b) (request-of b method path params opts))
+             b        (assoc b
+                             :response response
+                             :path (let [[uri qs] (split-path path)] (cond-> uri qs (str "?" qs)))
+                             :jar (into {} (remove (comp nil? val)) (merge (:jar b) (cookies response)))
+                             :token (or (csrf-token response) (:token b)))]
+         (if (and (not (false? (:follow? opts))) (redirect? (:status response)) (location response))
+           (if (< hops max-redirects)
+             (recur b :get (location response) nil (inc hops))
+             (throw (ex-info (str "web-base: more than " max-redirects " redirects from " path)
+                             {:path path})))
+           b))))))
 
 (defn gate-refusal?
   "Whether `response` is the gate's refusal of a request with no subject, sent to

@@ -13,7 +13,12 @@
             [ring.middleware.anti-forgery.session :as anti-forgery-session]
             [ring.middleware.anti-forgery.strategy :as strategy])
   (:import [java.security SecureRandom]
-           [java.util Base64]))
+           [java.util Base64 Locale]))
+
+(defn- lower
+  "Locale/ROOT, so a Turkish default locale cannot turn `I` into a dotless `ı`."
+  [s]
+  (.toLowerCase (str s) Locale/ROOT))
 
 (def default-headers
   {"X-Content-Type-Options" "nosniff"
@@ -62,9 +67,9 @@
   "The base's headers under the handler's, matched without regard to case:
   a handler writing `x-frame-options` must not end up with two."
   [headers base]
-  (let [present (set (map str/lower-case (keys headers)))]
+  (let [present (set (map lower (keys headers)))]
     (reduce-kv (fn [acc k v]
-                 (if (present (str/lower-case k)) acc (assoc acc k v)))
+                 (if (present (lower k)) acc (assoc acc k v)))
                (or headers {})
                base)))
 
@@ -95,7 +100,7 @@
   controls instead."
   [handler]
   (fn [request]
-    (let [proto (some-> (first-forwarded (get-in request [:headers "x-forwarded-proto"])) str/lower-case)
+    (let [proto (some-> (first-forwarded (get-in request [:headers "x-forwarded-proto"])) lower)
           for   (first-forwarded (get-in request [:headers "x-forwarded-for"]))]
       (handler (cond-> request
                  (#{"http" "https"} proto) (assoc :scheme (keyword proto))

@@ -9,10 +9,10 @@
   children's, so nested routes accumulate their stack and a child opts out with
   `^:replace`. Height counts from the innermost layout, which is why adding an
   outer layout later never invalidates a height a handler already names."
-  (:require [clojure.string :as str]
-            [dev.arkaitz.web-base.htmx :as htmx]
+  (:require [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.security :as security]
-            [hiccup2.core :as h]))
+            [hiccup2.core :as h])
+  (:import [java.util Locale]))
 
 (defn html
   "Hiccup data → HTML string. `:mode :html` because hiccup 2 defaults to XHTML
@@ -27,7 +27,7 @@
   (or (vector? body) (seq? body)))
 
 (defn- header-present? [headers name]
-  (some #(= (str/lower-case %) name) (keys headers)))
+  (some #(= (.toLowerCase (str %) Locale/ROOT) name) (keys headers)))
 
 (defn- strip
   "The response keys that only the base reads must not reach the server."

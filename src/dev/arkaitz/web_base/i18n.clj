@@ -12,14 +12,21 @@
   fragment that arrives a second later carries the same headers and must land
   in the same language."
   (:require [clojure.string :as str]
-            [taoensso.tempura :as tempura]))
+            [taoensso.tempura :as tempura])
+  (:import [java.util Locale]))
+
+(defn- lower
+  "Locale/ROOT: under a Turkish default locale `en-IE` lowercases to `en-ıe`, which
+  matches no dictionary key."
+  [s]
+  (.toLowerCase ^String s Locale/ROOT))
 
 (defn- normalise
   "`EN_gb` → `:en-gb`, empty parts dropped, nothing left → nil. Tempura only
   lowercases a locale while expanding its subtags, so the base normalises
   before handing anything over and `:wb/locale` and `tr` cannot disagree."
   [locale]
-  (let [parts (remove str/blank? (str/split (str/lower-case (name locale)) #"[_-]"))]
+  (let [parts (remove str/blank? (str/split (lower (name locale)) #"[_-]"))]
     (when (seq parts)
       (keyword (str/join "-" parts)))))
 
@@ -32,7 +39,7 @@
 (defn- dictionary-index
   "Lowercased locale name → the dictionary's own key."
   [dict]
-  (into {} (map (fn [k] [(str/lower-case (name k)) k])) (keys dict)))
+  (into {} (map (fn [k] [(lower (name k)) k])) (keys dict)))
 
 (defn- resolve-locale [index preferences]
   (some (fn [preference] (some index (candidates preference))) preferences))

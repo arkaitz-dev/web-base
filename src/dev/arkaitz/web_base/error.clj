@@ -14,7 +14,8 @@
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.render :as render]
             [reitit.coercion :as coercion]
-            [reitit.core :as r]))
+            [reitit.core :as r])
+  (:import [java.util Locale]))
 
 (def vary
   "Error responses vary on the htmx headers and on `Accept`."
@@ -144,11 +145,12 @@
 (defn- allowed-methods
   "The `Allow` value a 405 must carry (RFC 9110 §15.5.6), from the route's
   compiled methods. reitit adds an OPTIONS endpoint to every route by default,
-  so OPTIONS is listed unless the host disabled that."
+  so OPTIONS is listed unless the host disabled that. Locale/ROOT: under a Turkish
+  default locale \"options\" upper-cases to OPTİONS."
   [result]
   (->> result
        (keep (fn [[method handler]] (when handler method)))
-       (map (comp str/upper-case name))
+       (map #(.toUpperCase ^String (name %) Locale/ROOT))
        sort
        (str/join ", ")))
 

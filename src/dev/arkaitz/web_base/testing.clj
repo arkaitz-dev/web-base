@@ -7,14 +7,20 @@
   (:require [clojure.string :as str]
             [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.htmx :as htmx]
-            [dev.arkaitz.web-base.security :as security]))
+            [dev.arkaitz.web-base.security :as security])
+  (:import [java.util Locale]))
+
+(defn- lower
+  "Locale/ROOT, so a Turkish default locale cannot turn `I` into a dotless `ı`."
+  [s]
+  (.toLowerCase (str s) Locale/ROOT))
 
 (defn- header-values
   "The values of header `name` in `headers`, whatever the case of the key and
   whether Ring holds one string or several."
   [headers name]
-  (let [wanted (str/lower-case name)
-        values (some (fn [[k v]] (when (= wanted (str/lower-case (str k))) v)) headers)]
+  (let [wanted (lower name)
+        values (some (fn [[k v]] (when (= wanted (lower k)) v)) headers)]
     (cond (nil? values)    []
           (string? values) [values]
           :else            (vec values))))
@@ -31,7 +37,7 @@
   [attributes]
   (boolean (some (fn [attribute]
                    (when-let [[name value] (pair attribute)]
-                     (when (= "max-age" (str/lower-case name))
+                     (when (= "max-age" (lower name))
                        (try (<= (Long/parseLong value) 0)
                             (catch NumberFormatException _ false)))))
                  attributes)))
@@ -136,7 +142,7 @@
              :headers        (cond-> {"host" "localhost"}
                                cookie (assoc "cookie" cookie)
                                htmx?  (merge htmx/fragment-headers)
-                               (and htmx? token) (assoc (str/lower-case security/csrf-header) token))}
+                               (and htmx? token) (assoc (lower security/csrf-header) token))}
       qs    (assoc :query-string qs)
       bytes (-> (assoc :body (java.io.ByteArrayInputStream. bytes)
                        :content-length (alength ^bytes bytes)

@@ -151,7 +151,14 @@
               stopping (future (let [r (try (server/stop handle) (catch Throwable t t))] (swap! trace conj :stop-returned) r))
               [answers outcome] (answers-until-refused port)]
           (is (= :refused outcome) (str "new connections are refused while the request drains, got " (last answers)))
-          (is (every? #{[200 "fast"]} answers) (str "whatever answered before the connector closed answered whole: " answers))
+          ;; Jetty's graceful handler starts refusing a moment before the connector closes,
+          ;; so a connection accepted in between is answered 503 (measured: 2 runs in 40).
+          ;; Whatever answered did so whole — served before the drain began, or refused by it
+          ;; — and never served again once it had refused.
+          (is (re-matches #"(200 )*(503 )*" (apply str (map #(str (first %) " ") answers)))
+              (str "before the connector closed, whole 200s and then only 503s: " (mapv first answers)))
+          (is (every? #(or (= [200 "fast"] %) (= 503 (first %))) answers)
+              (str "a 200 is the handler's own answer: " (mapv first answers)))
           ;; Not the witness of waiting on its own — a window of 0 is still pending here,
           ;; stopping the pool under a parked handler — the 200 and the trace below are.
           (is (= ::pending (deref stopping 0 ::pending)) "stop is still pending while the request is in flight")

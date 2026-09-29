@@ -7,6 +7,7 @@
             [demo.store :as store]
             [demo.views :as views]
             [dev.arkaitz.web-base.integrant]
+            [dev.arkaitz.web-base.response :as response]
             [integrant.core :as ig]
             [reitit.coercion.malli :as malli-coercion]))
 
@@ -15,6 +16,9 @@
 
 (defmethod ig/init-key :demo/web-config [_ {:keys [store session-key secure?]}]
   {:routes       (routes/routes store)
+   ;; Answered before the session: a probe reads and writes none. The demo has no
+   ;; database, so it is ready whenever it answers at all.
+   :sessionless  {"/health" (response/health (constantly true))}
    :coercion     malli-coercion/coercion
    :subject-fn   #(get-in % [:session :subject])
    :login-path   "/login"

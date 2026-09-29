@@ -147,3 +147,9 @@
     (is (not= before after) "with a different id: the demo called session/rotate")
     (is (= "ada" (get-in @sessions [after :subject])) "the new session holds the subject")
     (is (nil? (get @sessions before)) "and the old id is gone from the store")))
+
+(deftest the-health-probe-is-the-bases-own--answered-before-the-session
+  (let [r ((app) (mock/request :get "/health"))]
+    (is (= [200 "ok" "no-store"] [(:status r) (:body r) (get-in r [:headers "Cache-Control"])])
+        "ok, uncached: web-base's response/health, not a page of the demo's")
+    (is (nil? (get-in r [:headers "Set-Cookie"])) "and no session was touched")))

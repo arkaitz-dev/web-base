@@ -37,5 +37,4 @@
                                (if (htmx/partial-request? request)
                                  (handlers/boom request)
                                  (handlers/boom-page request)))}}]
-    ["/throw" {:get {:handler handlers/boom}}]
-    ["/health" {:get {:handler (fn [_] {:status 200 :headers {"Content-Type" "text/plain"} :body "ok"})}}]]])
+    ["/throw" {:get {:handler handlers/boom}}]]])

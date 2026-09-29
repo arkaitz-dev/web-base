@@ -153,7 +153,7 @@
   {[:session]         #{:key :store :cookie-attrs :cookie-name}
    [:security]        #{:frame-options :csp :hsts :proxy-hops}
    [:security :hsts]  #{:max-age :include-subdomains?}
-   [:i18n]            #{:dict :default-locale :locale-fn}
+   [:i18n]            #{:dict :default-locale :locale-fn :locales}
    ;; `:paths` too: reitit reads it though its docstring does not list it.
    [:static]          #{:parameter :root :path :loader :index-files :index-redirect?
                         :canonicalize-uris? :not-found-handler :mime-types :allow-symlinks? :paths}})
@@ -421,7 +421,8 @@
     :coercion     a reitit coercion, passed through (optional)
     :static       create-resource-handler options for the host's assets (optional)
     :error-layout slot function for error pages (optional)
-    :i18n         `{:dict … :default-locale … :locale-fn …}` (optional)
+    :i18n         `{:dict … :default-locale … :locales […] :locale-fn …}` (optional;
+                  `:locales` since 0.12.0, the default alone when absent)
     :security     `{:frame-options … :csp … :hsts {:max-age seconds} :proxy-hops n}` (optional)
     :csrf         false to disable the anti-forgery token (on for anything else, nil included)
     :sessionless  `{\"/health\" handler \"/api/\" handler}` — answered before the session,

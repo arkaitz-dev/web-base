@@ -14,12 +14,16 @@
                   :zh-Hans {:greet "你好 %1"}
                   :zh      {:greet "zh %1"}})
 
+(def ^:private L
+  "Every locale of `D`: this suite's site speaks them all (`:locales`, since 0.12.0)."
+  [:en :es :zh-Hans :zh])
+
 (defn- seen [request]
   [(:wb/locale request)
    ((:wb/tr request) [:greet] ["Ann"])
    ((:wb/tr request) [:only-en])])
 
-(defn- app-with [config] (i18n/wrap seen (merge {:dict D} config)))
+(defn- app-with [config] (i18n/wrap seen (merge {:dict D :locales L} config)))
 (def ^:private app-es (app-with {:default-locale :es}))
 (def ^:private app-en (app-with {:default-locale :en}))
 
@@ -40,25 +44,40 @@
                              {:config-key [:i18n :default-locale] :value value :locales [:en :es :zh-Hans :zh]}])]
     (doseq [config [{} {:dict {} :default-locale :en} {:dict nil :default-locale :en} {:dict [[:en {}]] :default-locale :en}]]
       (is (= no-dict (attempt config)) (str "no dictionary: " (pr-str config))))
-    (doseq [[config value] [[{:dict D} nil] [{:dict D :default-locale :fr} :fr]
-                            [{:dict D :default-locale "en"} "en"] [{:dict D :default-locale :EN} :EN]]]
+    (doseq [[config value] [[{:dict D :locales L} nil] [{:dict D :locales L :default-locale :fr} :fr]
+                            [{:dict D :locales L :default-locale "en"} "en"] [{:dict D :locales L :default-locale :EN} :EN]]]
       (is (= (bad-def value) (attempt config)) (str "default not a dictionary key: " (pr-str value))))
+    (doseq [bad [[] [:en :en] ["en"] :en]]
+      (is (= ["web-base: i18n :locales must be a vector of distinct locale keywords"
+              {:config-key [:i18n :locales] :value bad}]
+             (attempt {:dict D :default-locale :en :locales bad}))
+          (str "a malformed :locales is refused: " (pr-str bad))))
+    (is (= ["web-base: i18n :default-locale must be one of :locales"
+            {:config-key [:i18n :default-locale] :value :es :locales [:en]}]
+           (attempt {:dict {:en {} :es {}} :default-locale :es :locales [:en]}))
+        "the default is a language the site speaks")
+    (is (= ["web-base: the i18n dictionary has [:es :zh :zh-Hans], which the site does not speak — list every language in :i18n :locales, or drop those entries"
+            {:config-key [:i18n :locales] :value [:es :zh :zh-Hans]}]
+           (attempt {:dict D :default-locale :en}))
+        "a dictionary in a language the site does not list is refused, not served to whoever asks for it")
+    (is (= ::constructed (attempt {:dict {:en {}} :default-locale :en}))
+        "control: one language and no :locales is a site that speaks its default")
     (is (= ["web-base: i18n :locale-fn must be a function of the request" {:config-key [:i18n :locale-fn] :value "en"}]
-           (attempt {:dict D :default-locale :es :locale-fn "en"}))
+           (attempt {:dict D :locales L :default-locale :es :locale-fn "en"}))
         "a non-callable :locale-fn is refused")
     (let [calls (atom 0)]
-      (is (= ::constructed (attempt {:dict D :default-locale :es}))
+      (is (= ::constructed (attempt {:dict D :locales L :default-locale :es}))
           "a valid config constructs")
-      (is (fn? (i18n/wrap (fn [_] (swap! calls inc)) {:dict D :default-locale :es})) "wrap returns the handler")
+      (is (fn? (i18n/wrap (fn [_] (swap! calls inc)) {:dict D :locales L :default-locale :es})) "wrap returns the handler")
       (is (= 0 @calls) "without calling the inner one"))))
 
 (deftest every-request-gets-wb-tr-and-wb-locale-and-nothing-else-changes
-  (let [bare (i18n/wrap #(dissoc % :wb/tr) {:dict D :default-locale :es})]
+  (let [bare (i18n/wrap #(dissoc % :wb/tr) {:dict D :locales L :default-locale :es})]
     (is (= {:uri "/x" :headers {"accept-language" "en-GB"} :wb/locale :en}
            (bare {:uri "/x" :headers {"accept-language" "en-GB"}}))
         "exactly :wb/locale added (plus :wb/tr), nothing else touched")
     (is (= {:uri "/" :wb/locale :es} (bare {:uri "/"})) "a request without :headers gets the default"))
-  (is (fn? (:wb/tr ((i18n/wrap identity {:dict D :default-locale :es}) {}))) ":wb/tr is a function")
+  (is (fn? (:wb/tr ((i18n/wrap identity {:dict D :locales L :default-locale :es}) {}))) ":wb/tr is a function")
   (is (= ES (app-es {:uri "/"})) "and it answers, bound to the default"))
 
 (deftest accept-language-alone--first-supported-wins--q-order-beats-written-order--ties-keep-written-order
@@ -154,14 +173,14 @@
 
 (deftest tr-resources--missing-is-nil-not-a-throw--missing-entry-searched-through-the-list--inline-fallback--per-key-fallthrough
   (let [tr-of (fn [config header ids & [args]]
-                ((i18n/wrap (fn [r] [(:wb/locale r) ((:wb/tr r) ids args)]) (merge {:dict D} config))
+                ((i18n/wrap (fn [r] [(:wb/locale r) ((:wb/tr r) ids args)]) (merge {:dict D :locales L} config))
                  (get* "Accept-Language" header)))]
     (is (= [:en nil] (tr-of {:default-locale :es} "en" [:nope])) "a missing id is nil, no exception")
     (is (= [:en "Fallback"] (tr-of {:default-locale :es} "en" [:nope "Fallback"])) "inline fallback")
     (is (= [:en "Hello Z"] (tr-of {:default-locale :es} "en" [:nope :greet] ["Z"])) "the second id is searched")
-    (is (= [:en "[es?]"] (tr-of {:dict (assoc-in D [:es :missing] "[es?]") :default-locale :es} "en" [:nope]))
+    (is (= [:en "[es?]"] (tr-of {:locales L :dict (assoc-in D [:es :missing] "[es?]") :default-locale :es} "en" [:nope]))
         ":missing found in the default while the locale stays :en")
-    (is (= [:en "[en?]"] (tr-of {:dict (-> D (assoc-in [:en :missing] "[en?]") (assoc-in [:es :missing] "[es?]")) :default-locale :es} "en" [:nope]))
+    (is (= [:en "[en?]"] (tr-of {:locales L :dict (-> D (assoc-in [:en :missing] "[en?]") (assoc-in [:es :missing] "[es?]")) :default-locale :es} "en" [:nope]))
         "the first locale's :missing wins")
     (is (= [:es "Hola Ann" "en-only"] (accept app-en "es")) "a key absent in :es is answered from the default; the locale is still :es")))
 
@@ -181,9 +200,15 @@
                    :vectors   [(tr [:nope :greet] ["Z"]) (tr [:greet] ["Q"])]
                    :missing   [(tr :nope) (tr [:nope])]
                    :control   (tr [:only-en])})
-        seen    ((i18n/wrap capture {:dict D :default-locale :es}) (get* "Accept-Language" "en"))]
+        seen    ((i18n/wrap capture {:dict D :locales L :default-locale :es}) (get* "Accept-Language" "en"))]
     (is (= "en-only" (:control seen)) "control: today's vector shape still answers")
     (is (= "en-only" (:bare seen)) "(tr :id) — a bare id is wrapped into Tempura's vector")
     (is (= "Hello Ann" (:bare-args seen)) "(tr :id args) — with arguments")
     (is (= ["Hello Z" "Hello Q"] (:vectors seen)) "vector ids are passed through untouched, with args")
     (is (= [nil nil] (:missing seen)) "a missing id is nil through both shapes: no fallback layer")))
+
+(deftest a-language-the-site-speaks-names-the-request-though-its-strings-fall-back
+  (let [app (i18n/wrap seen {:dict {:en {:greet "Hello %1" :only-en "en-only"}} :default-locale :en :locales [:en :fr]})]
+    (is (= [:fr "Hello Ann" "en-only"] (accept app "fr"))
+        "a French request is French — `<html lang>` says so — while its strings, none of them French yet, fall back")
+    (is (= [:en "Hello Ann" "en-only"] (accept app "de")) "control: a language the site does not list is the default")))

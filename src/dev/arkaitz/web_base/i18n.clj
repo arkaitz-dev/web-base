@@ -1,8 +1,11 @@
 (ns dev.arkaitz.web-base.i18n
   "Which language to render, per request (SPEC §14). The host gives a Tempura
-  dictionary — its top-level keys are the supported locales — a default
-  locale, and optionally a function returning the request's own preference
-  list (a choice kept in the session, a cookie, a URL prefix). The base puts
+  dictionary keyed by locale, a default locale, the locales the site speaks — `:locales`,
+  and without it the default alone (since 0.12.0) — and optionally a function returning
+  the request's own preference list (a choice kept in the session, a cookie, a URL
+  prefix). The languages are the host's decision and nobody else's: a plugin's
+  dictionary never adds one, and a host dictionary in a locale `:locales` does not name is
+  refused rather than served half the time. The base puts
   two things on the request: `:wb/tr`, Tempura's translate function bound to
   the preferences, and `:wb/locale`, the first preference the dictionary
   actually supports, so `<html lang>` never names a language the page is not
@@ -85,15 +88,31 @@
                 (parse-accept-language (get-in request [:headers "accept-language"]))
                 [default-locale])))
 
-(defn- check-config! [{:keys [dict default-locale locale-fn]}]
+(defn locales-of
+  "The locales a site speaks: its `:locales`, or its `:default-locale` alone."
+  [{:keys [locales default-locale]}]
+  (if (some? locales) (vec locales) [default-locale]))
+
+(defn- check-config! [{:keys [dict default-locale locale-fn locales] :as config}]
   (when-not (and (map? dict) (seq dict))
     (throw (ex-info "web-base: i18n config needs :dict, a Tempura dictionary keyed by locale"
                     {:config-key [:i18n :dict]})))
+  (when-not (or (nil? locales)
+                (and (sequential? locales) (seq locales) (every? keyword? locales) (apply distinct? locales)))
+    (throw (ex-info "web-base: i18n :locales must be a vector of distinct locale keywords"
+                    {:config-key [:i18n :locales] :value locales})))
   (when-not (contains? dict default-locale)
     (throw (ex-info "web-base: i18n :default-locale must be one of the dictionary's locales"
                     {:config-key [:i18n :default-locale]
                      :value      default-locale
                      :locales    (vec (keys dict))})))
+  (when-not (some #(= default-locale %) (locales-of config))
+    (throw (ex-info "web-base: i18n :default-locale must be one of :locales"
+                    {:config-key [:i18n :default-locale] :value default-locale :locales locales})))
+  (when-let [unspoken (not-empty (vec (sort (remove (set (locales-of config)) (keys dict)))))]
+    (throw (ex-info (str "web-base: the i18n dictionary has " (pr-str unspoken) ", which the site does not"
+                         " speak — list every language in :i18n :locales, or drop those entries")
+                    {:config-key [:i18n :locales] :value unspoken})))
   (when (and (some? locale-fn) (not (ifn? locale-fn)))
     (throw (ex-info "web-base: i18n :locale-fn must be a function of the request"
                     {:config-key [:i18n :locale-fn] :value locale-fn}))))
@@ -120,7 +139,9 @@
                                   :default-locale default-locale
                                   :cache-dict?    true
                                   :cache-locales? false})
-        index (dictionary-index dict)]
+        ;; The spoken locales, not the dictionary's keys: a language the site speaks
+        ;; with few strings of its own still names the page, its strings falling back.
+        index (dictionary-index (zipmap (locales-of config) (repeat nil)))]
     (fn [request]
       (let [prefs (preferences config request)]
         (handler (assoc request

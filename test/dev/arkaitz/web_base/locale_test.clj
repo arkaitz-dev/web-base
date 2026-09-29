@@ -28,7 +28,7 @@
                          ["/framed" {:get (fn [_] {:status 200 :headers {"X-FRAME-OPTIONS" "SAMEORIGIN"} :body "framed"})}]]
                :session {:key KEY}
                :csrf    false
-               :i18n    {:dict {:en {} :en-ie {}} :default-locale :en}}))
+               :i18n    {:dict {:en {} :en-ie {}} :default-locale :en :locales [:en :en-ie]}}))
 
 (deftest a-405-lists-its-methods-in-ascii-under-a-turkish-default-locale
   (under-turkish

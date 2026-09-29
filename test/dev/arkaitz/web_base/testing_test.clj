@@ -428,7 +428,7 @@
         app (wb/handler
              {:session {:key KEY}
               :csrf    false
-              :i18n    {:dict {:en {:hi "hi"} :es {:hi "hola"}} :default-locale :en}
+              :i18n    {:dict {:en {:hi "hi"} :es {:hi "hola"}} :default-locale :en :locales [:en :es]}
               :routes  [["/r0" {:get (fn [_] {:status 301 :headers {"Location" "http://localhost/r1"} :body ""})}]
                         ["/r1" {:get (fn [_] {:status 303 :headers {"Location" "/r2"} :body ""})}]
                         ["/r2" {:get (fn [_] {:status 302 :headers {"location" "/r3"} :body ""})}]

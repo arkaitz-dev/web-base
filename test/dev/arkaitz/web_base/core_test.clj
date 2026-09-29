@@ -87,7 +87,7 @@
     (doseq [[path allowed] [[[:session :kye] "[:cookie-attrs :cookie-name :key :store]"]
                             [[:security :hts] "[:csp :frame-options :hsts :proxy-hops]"]
                             [[:security :hsts :max-aeg] "[:include-subdomains? :max-age]"]
-                            [[:i18n :default-lcoale] "[:default-locale :dict :locale-fn]"]
+                            [[:i18n :default-lcoale] "[:default-locale :dict :locale-fn :locales]"]
                             [[:static :roto] (str "[:allow-symlinks? :canonicalize-uris? :index-files :index-redirect?"
                                                   " :loader :mime-types :not-found-handler :parameter :path :paths :root]")]]]
       (is (= [(str "web-base: unknown key [" (pr-str (peek path)) "] in " (pr-str (pop path)) " — it takes " allowed)
@@ -227,13 +227,13 @@
         "frame-options false omits the header, on a 404 too")))
 
 (deftest i18n-puts-locale-and-tr-on-the-request-and-the-default-error-page-lang-follows
-  (let [app (wb/handler (config :csrf false :i18n {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en}))]
+  (let [app (wb/handler (config :csrf false :i18n {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en :locales [:en :es]}))]
     (is (= ":es|Hola" (:body (app (mock/header (mock/request :get "/see") "Accept-Language" "es-ES,es;q=0.9")))))
     (is (= ":en|Hello" (:body (app (mock/request :get "/see")))))
     (is (= (page 404 (frag 404) "es") (:body (app (mock/header (mock/request :get "/nope") "Accept-Language" "es"))))
         "the default handler's 404 renders in the negotiated language")
     (let [r (app (mock/header (mock/request :post "/post") "Accept-Language" "es"))]
-      (is (= (page 403 (frag 403) "es") (:body ((wb/handler (config :i18n {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en}))
+      (is (= (page 403 (frag 403) "es") (:body ((wb/handler (config :i18n {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en :locales [:en :es]}))
                                                 (mock/header (mock/request :post "/post") "Accept-Language" "es"))))
           "a CSRF refusal renders in the negotiated language: csrf sits inside i18n")
       (is (= 200 (:status r)))))
@@ -974,7 +974,7 @@
   ;; the host's own error layout — not the outer boundary's bare page, which is for what
   ;; failed before a language or a session existed.
   (let [layout (fn [{:keys [content request]}] [:main [:h1 ((:wb/tr request) [:too-big])] content])
-        app    (wb/handler (config :i18n {:dict {:en {:too-big "Too big"} :eu {:too-big "Handiegia"}} :default-locale :en}
+        app    (wb/handler (config :i18n {:dict {:en {:too-big "Too big"} :eu {:too-big "Handiegia"}} :default-locale :en :locales [:en :eu]}
                                    :error-layout layout
                                    :routes [["/form" {:wb/layouts [(fn [{:keys [content request]}] [:main content (security/csrf-field request)])]
                                                       :get (fn [_] {:status 200 :body [:p "form"]})}]

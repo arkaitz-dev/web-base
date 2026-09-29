@@ -577,8 +577,16 @@ recommended option 1; the author's call stands, and this paragraph is its paper 
 
 ### The seam
 
-- The host configures `:i18n {:dict … :default-locale … :locale-fn …}`. `:dict` is a
-  Tempura dictionary; its top-level keys are the **supported locales**.
+- The host configures `:i18n {:dict … :default-locale … :locales […] :locale-fn …}`.
+  `:dict` is a Tempura dictionary keyed by locale. **Amended 2026-09-29 (0.12.0):** the
+  supported locales are `:locales`, and without it the default alone — no longer the
+  dictionary's keys. Plugins made the difference: a plugin's dictionary in English and
+  Spanish turned an English-only site into one that answered a Spanish browser with a
+  Spanish login and `<html lang="es">` over its own English pages, measured on the first
+  host that installed one. The languages are the host's decision: a plugin's dictionary
+  is taken only in them, a host dictionary in a language `:locales` does not name is
+  refused, and a language the site lists with no strings of its own names the request
+  while its strings fall back.
 - Per request the base computes the preference list — `(:locale-fn request)` when the
   host supplies one (a preference kept in the session, a cookie, a URL prefix), else the
   parsed `Accept-Language` — followed by the default locale.

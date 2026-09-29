@@ -270,7 +270,7 @@
 (deftest the-hosts-dictionary-rewords-one-key-and-the-plugins-other-keys-and-locales-survive
   (let [cfg {:routes  [["/t" {:get (fn [r] {:status 200 :body (str ((:wb/tr r) [:k]) "|" ((:wb/tr r) [:j]))})}]]
              :session {:key KEY}
-             :i18n    {:dict {:en {:k "HOST"}} :default-locale :en}
+             :i18n    {:dict {:en {:k "HOST"}} :default-locale :en :locales [:en :es]}
              :plugins [{:wb.plugin/name :a :i18n {:dict {:en {:k "A" :j "AJ"} :es {:k "AES" :j "AJES"}}}}
                        ;; A plugin with no dictionary, after one with it: it must erase nothing.
                        {:wb.plugin/name :b :sessionless {"/b" identity}}]}
@@ -280,6 +280,25 @@
         "the merged dictionary: the host's one key over the plugin's, everything else the plugin's")
     (is (= "AES|AJES" (say "es")) "witness: Spanish is negotiated, and entirely the plugin's")
     (is (= "HOST|AJ" (say "en")) "English: the host's word for :k, the plugin's for :j")))
+
+(deftest a-plugin-never-adds-a-language-the-host-does-not-speak
+  (let [page (fn [r] {:status 200 :body [:p ((:wb/tr r) [:k])]})
+        plug {:wb.plugin/name :a :i18n {:dict {:en {:k "A"} :es {:k "AES"} :eu {:k "AEU"}}}}
+        cfg  (fn [i18n] {:routes  [["/t" {:wb/layouts [(fn [{:keys [content request]}] (shell/page {:request request :content content}))]
+                                           :get page}]]
+                         :session {:key KEY} :i18n i18n :plugins [plug]})
+        ask  (fn [c lang] (let [body (:body ((wb/handler c) (mock/header (mock/request :get "/t") "Accept-Language" lang)))]
+                            [(second (re-find #"<html lang=\"([^\"]*)\"" body)) (second (re-find #"<p>([^<]*)</p>" body))]))]
+    (is (= {:en {:k "A"}} (get-in (wb/expand (cfg {:default-locale :en})) [:i18n :dict]))
+        "with no :locales the site speaks its default alone, and the plugin's other languages are not taken")
+    (is (= ["en" "A"] (ask (cfg {:default-locale :en}) "es"))
+        "so a Spanish browser gets the English site, and the page says so — never lang=es over English pages")
+    (is (= ["es" "AES"] (ask (cfg {:default-locale :en :locales [:en :es]}) "es"))
+        "a host that lists Spanish gets the plugin's Spanish")
+    (is (= [{:en {:k "A"} :fr {}} ["fr" "A"]]
+           [(get-in (wb/expand (cfg {:default-locale :en :locales [:en :fr]})) [:i18n :dict])
+            (ask (cfg {:default-locale :en :locales [:en :fr]}) "fr")])
+        "a language the host speaks and the plugin lacks is named on the page, its strings falling back")))
 
 (deftest a-plugins-routes-follow-the-hosts-and-a-path-both-claim-is-refused
   (let [r (fn [path] [path {:get (fn [_] {:status 200 :body path})}])

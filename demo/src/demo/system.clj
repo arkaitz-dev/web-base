@@ -27,6 +27,7 @@
    :error-layout views/error-page
    :i18n         {:dict           i18n/dictionary
                   :default-locale :es
+                  :locales        [:es :en]
                   :locale-fn      #(some-> (get-in % [:session :locale]) vector)}
    :security     {:csp (str "default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self'; "
                             "img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")}})

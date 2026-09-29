@@ -5,6 +5,17 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.12.0 — unreleased
+
+- **Breaking:** `:i18n :locales` lists the languages the site speaks; without it, the
+  site speaks its `:default-locale` alone. It was the dictionary's keys, so a plugin's
+  English and Spanish dictionary made an English-only site answer a Spanish browser with
+  a Spanish login and `<html lang="es">` over every page. A plugin's dictionary is now
+  taken only in the listed languages, and a host `:dict` entry in any other is refused
+  at construction — a bilingual host adds `:locales [:en :es]`. A listed language with
+  no strings still names the request (`:wb/locale`, `<html lang>`), its strings falling
+  back to the default's.
+
 ## 0.11.0 — 2026-09-29
 
 - **Breaking:** `:assets`, `:stylesheets` and `:plugins` are the base's names now. A host

@@ -113,7 +113,7 @@ What it does not do: authenticate, authorise, persist, or know your domain.
     :login-path "/login"
     :session    {:key (System/getenv "WB_SESSION_KEY")}   ; base64 of 16 bytes
     :static     {:root "public"}
-    :i18n       {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en}
+    :i18n       {:dict {:en {:hi "Hello"} :es {:hi "Hola"}} :default-locale :en :locales [:en :es]}
     :security   {:csp "default-src 'self'; script-src 'nonce-{nonce}'"}}))
 
 (def server (wb/start #'app {:port 3000}))   ; => {:server … :port 3000}; (wb/stop server)
@@ -210,7 +210,7 @@ on demand.
 | `:coercion` | a reitit coercion, passed through |
 | `:static` | `create-resource-handler` options for the host's assets, e.g. `{:root "public"}` |
 | `:error-layout` | slot function used for error pages: receives `:content`, `:request`, `:error` |
-| `:i18n` | `{:dict tempura-dict :default-locale k :locale-fn (fn [request] preferences)}` |
+| `:i18n` | `{:dict tempura-dict :default-locale k :locales [k …] :locale-fn (fn [request] preferences)}` — `:locales` are the languages the site speaks, the default alone when absent (since 0.12.0); a `:dict` entry in any other is refused |
 | `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age seconds} :proxy-hops n}` — HSTS's `max-age` is seconds, the header's own unit (a year is `31536000`); a value past a billion is refused as milliseconds |
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
 | `:sessionless` | `{"/health" handler "/api/" api}`: answered before the session — no session read or written, no CSRF, no locale, no subject; the request id, security headers and body limit still apply. A path ending in `/` takes everything under it (an exact path wins, a longer prefix over a shorter); `/` itself is refused. A handler may be a var; a path or prefix that covers one of `:routes` is refused |
@@ -247,7 +247,9 @@ from nothing else, so what a plugin adds is one call away at the REPL. The rules
 routes are yours first, then each plugin's; sessionless paths, asset roots and
 stylesheets are unions, a path given twice refused; each plugin owns the dictionary keys
 it brings per locale, and your `:i18n :dict` is merged over them key by key, so you can
-reword any string a plugin ships; `:default-locale` and `:locale-fn` are yours alone;
+reword any string a plugin ships; `:default-locale`, `:locales` and `:locale-fn` are
+yours alone, and a plugin's dictionary is taken only in the languages you list — an
+English-only site stays English whatever a plugin speaks (since 0.12.0);
 for `:subject-fn`, `:login-path` and `:session` your value wins (an explicit nil is no
 value), one plugin may supply a missing one, and two are refused. Every collision fails
 at construction, naming the plugins and the key. A plugin names one asset root, `{:path

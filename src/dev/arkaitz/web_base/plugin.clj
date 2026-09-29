@@ -13,16 +13,20 @@
     refused (the last two by `handler`, which checks the host's own too). Stylesheets come
     in plugin order and the host's last, so the host's cascade wins. A plugin names one
     asset root, `{:path … :root …}`; the host's `:assets` is a vector of them.
-  - `:i18n :dict`: each plugin owns the keys it brings under each locale, and two plugins
-    bringing one are refused; the host's dictionary is merged over the result, key by
-    key, so any string a plugin ships can be replaced. `:default-locale` and `:locale-fn`
-    are the host's alone, and a plugin dictionary without a host `:default-locale` is
-    refused.
+  - `:i18n :dict`: only the locales the host speaks are taken from a plugin's dictionary
+    — `:i18n :locales`, or the `:default-locale` alone — so a plugin never adds a
+    language to the site (since 0.12.0). Each plugin owns the keys it brings under each
+    locale, and two plugins bringing one are refused; the host's dictionary is merged
+    over the result, key by key, so any string a plugin ships can be replaced. Every
+    spoken locale is in the result, empty when no plugin speaks it, so its strings fall
+    back as Tempura falls back. `:default-locale`, `:locales` and `:locale-fn` are the
+    host's alone, and a plugin dictionary without a host `:default-locale` is refused.
   - `:subject-fn`, `:login-path`, `:session`: the host's value wins — an explicit nil is
     no value — and with none, one plugin may supply it; two are refused.
   - A plugin's routes are top-level siblings of the host's: they carry their own
     `:wb/layouts` and `:wb/gate`, and inherit none of the host's."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [dev.arkaitz.web-base.i18n :as i18n]))
 
 (def ^:private plugin-keys
   #{:wb.plugin/name :routes :sessionless :assets :stylesheets :i18n :subject-fn :login-path :session})
@@ -101,9 +105,11 @@
              (or b {})))
 
 (defn- merged-dict
-  "The plugins' dictionaries, each owning its keys per locale, with the host's over them."
-  [plugins host-dict]
-  (let [owned (reduce (fn [acc p]
+  "The plugins' dictionaries in the `spoken` locales, each owning its keys per locale,
+  with the host's over them."
+  [plugins spoken host-dict]
+  (let [plugins (map #(update-in % [:i18n :dict] select-keys spoken) plugins)
+        owned (reduce (fn [acc p]
                         (reduce-kv (fn [acc locale entries]
                                      (reduce (fn [acc k]
                                                (when-let [other (get-in acc [locale k])]
@@ -114,8 +120,8 @@
                                              acc (keys entries)))
                                    acc (get-in p [:i18n :dict])))
                       {} plugins)
-        dicts (reduce (fn [acc p] (deep-merge acc (get-in p [:i18n :dict]))) {} plugins)]
-    (when (seq owned) (deep-merge dicts host-dict))))
+        dicts (reduce (fn [acc p] (deep-merge acc (get-in p [:i18n :dict]))) (zipmap spoken (repeat {})) plugins)]
+    (deep-merge dicts host-dict)))
 
 (defn expand
   "The plain config `config` stands for, its `:plugins` merged in by the rules of this
@@ -134,12 +140,15 @@
           (fail! (str "plugin " twice " is given twice") [:plugins])))
       (when-not (or (nil? (:sessionless config)) (map? (:sessionless config)))
         (fail! "config :sessionless must be a map of path to handler" [:sessionless]))
-      (let [dict       (merged-dict plugins (get-in config [:i18n :dict]))
+      (let [brought    (some #(seq (get-in % [:i18n :dict])) plugins)
+            dict       (when brought
+                         (merged-dict plugins (set (i18n/locales-of (:i18n config))) (get-in config [:i18n :dict])))
             routes     (into (route-seq (:routes config)) (mapcat (comp route-seq :routes) plugins))
             sessionless (reduce (fn [acc p] (union-refusing acc (:sessionless p) (str "plugin " (:wb.plugin/name p)) :sessionless))
                                 (:sessionless config) plugins)]
-        (when (and dict (nil? (get-in config [:i18n :default-locale])))
-          (fail! (str "plugins bring dictionaries for " (pr-str (vec (sort (keys dict))))
+        (when (and brought (nil? (get-in config [:i18n :default-locale])))
+          (fail! (str "plugins bring dictionaries for "
+                      (pr-str (vec (sort (distinct (mapcat #(keys (get-in % [:i18n :dict])) plugins)))))
                       "; the host chooses the locale with :i18n :default-locale")
                  [:i18n :default-locale]))
         (as-> (dissoc config :plugins) cfg

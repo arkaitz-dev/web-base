@@ -48,22 +48,18 @@
       (is (and (= 200 (:status r)) (testing/gate-refusal? r "/login"))
           (str "an htmx request gets HX-Redirect and never a Location — got status " (:status r)
                ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
-    (let [form    (get* app "/login")
-          token   (testing/csrf-token form)
-          login   (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
-                           (testing/with-cookies form)))
-          rotated (testing/cookies login)]
-      (is (some? token) "the login form carries the csrf field")
-      (is (= [303 "/private"] [(:status login) (get-in login [:headers "Location"])]) "login redirects to the private page")
+    (let [form  (testing/visit (testing/browser app) :get "/login")
+          login (testing/visit form :post "/login" {"name" "ada"} {:follow? false})]
+      (is (some? (testing/csrf-token (:response form))) "the login form carries the csrf field")
+      (is (= [303 "/private"] [(:status (:response login)) (get-in (:response login) [:headers "Location"])])
+          "login redirects to the private page")
       ;; That the id rotated is proved below over a store with ids: under the
       ;; cookie store every write differs anyway (random IV).
-      (is (seq rotated) "login wrote the session cookie")
-      (let [private (app (testing/with-cookies (mock/request :get "/private") login))]
-        (is (= 200 (:status private)))
-        (is (str/includes? (:body private) "Eres ada") "the private page names the subject")))
-    (let [form   (get* app "/login")
-          login  (app (-> (mock/request :post "/login" {"name" "x" "__anti-forgery-token" (testing/csrf-token form)})
-                          (testing/with-cookies form)))]
+      (is (seq (testing/cookies (:response login))) "login wrote the session cookie")
+      (let [private (testing/visit login :get "/private")]
+        (is (= [200 "/private"] [(:status (:response private)) (:path private)]))
+        (is (str/includes? (:body (:response private)) "Eres ada") "the private page names the subject")))
+    (let [login (:response (-> (testing/browser app) (testing/visit :get "/login") (testing/visit :post "/login" {"name" "x"})))]
       (is (= 200 (:status login)) "a rejected name re-renders the form")
       (is (str/includes? (:body login) "dinos quién eres") "with malli's message in the page's language"))))
 
@@ -87,28 +83,23 @@
   (let [app (app)]
     (is (str/starts-with? (:body (get* app "/" "Accept-Language" "en")) "<!DOCTYPE html>\n<html lang=\"en\">") "Accept-Language")
     (is (str/includes? (:body (get* app "/" "Accept-Language" "en")) ">Tasks<") "translated tabs")
-    (let [form   (get* app "/")
-          token  (testing/csrf-token form)
-          _      (is (some? token) "the home page carries the token in the shell's <body>")
-          _      (is (seq (testing/cookies form)) "and minted the session")
-          switch (app (-> (mock/request :post "/lang" {"locale" "en" "__anti-forgery-token" token})
-                          (testing/with-cookies form)))
-          ;; The switch rewrote the session: its cookie, or the page's if it set none.
-          after  (app (-> (mock/request :get "/") (mock/header "Accept-Language" "es")
-                          (testing/with-cookies form) (testing/with-cookies switch)))]
-      (is (= 303 (:status switch)))
-      (is (str/starts-with? (:body after) "<!DOCTYPE html>\n<html lang=\"en\">") "the session's choice beats the header"))))
+    (let [home   (testing/visit (testing/browser app) :get "/")
+          _      (is (some? (testing/csrf-token (:response home))) "the home page carries the token in the shell's <body>")
+          _      (is (seq (testing/cookies (:response home))) "and minted the session")
+          switch (testing/visit home :post "/lang" {"locale" "en"} {:follow? false})
+          after  (testing/visit switch :get "/" nil {:headers {"accept-language" "es"}})]
+      (is (= 303 (:status (:response switch))))
+      (is (str/starts-with? (:body (:response after)) "<!DOCTYPE html>\n<html lang=\"en\">") "the session's choice beats the header"))))
 
 (deftest todos-round-trip-through-htmx-with-the-csrf-header
   (let [app    (app)
-        form   (get* app "/login")
-        token  (testing/csrf-token form)
-        add    (app (-> (mock/request :post "/todos" {"title" "dos"})
-                        (testing/with-cookies form) testing/fragment (mock/header "X-CSRF-Token" token)))]
+        form   (testing/visit (testing/browser app) :get "/login")
+        add    (:response (testing/visit form :post "/todos" {"title" "dos"} {:htmx? true}))]
     (is (= 200 (:status add)))
     (is (str/starts-with? (:body add) "<div id=\"todos\">") "the fragment htmx swaps in")
     (is (and (str/includes? (:body add) "uno") (str/includes? (:body add) "dos")))
-    (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (testing/with-cookies form) testing/fragment))))
+    ;; By hand: `visit` refuses to send an unsafe request without the token, on purpose.
+    (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (testing/with-cookies (:response form)) testing/fragment))))
         "without the token: the base's 403")))
 
 (deftest boom-is-the-page-on-a-history-restore-and-the-500-fragment-on-a-swap

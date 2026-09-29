@@ -5,7 +5,7 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
-## 0.11.0 — unreleased
+## 0.11.0 — 2026-09-29
 
 - **Breaking:** `:assets`, `:stylesheets` and `:plugins` are the base's names now. A host
   that kept its own values under them is refused at construction; rename them.

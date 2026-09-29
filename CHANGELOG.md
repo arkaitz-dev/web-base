@@ -5,6 +5,12 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.10.1 — 2026-09-29
+
+- A native image of 0.10.0 died at boot: the rate floor reached each connector's
+  factories by reflection. Every call in the base now resolves at compile time, and a
+  test says so.
+
 ## 0.10.0 — 2026-09-29
 
 - **Breaking:** `:security :proxy?` is refused, naming its replacement. It took the first

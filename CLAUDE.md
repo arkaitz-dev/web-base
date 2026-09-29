@@ -81,7 +81,11 @@ explicitly. The moment web-base *calls* a module — a plugin registry, auto-dis
 hook system — that module must know web-base in order to be called, and it stops being
 liftable. This is precisely what made Django's `contrib.auth` impossible to extract, and
 avoiding it is the reason this project exists. Corollary: **no ambient global state**;
-configuration is passed in.
+configuration is passed in. **Plugins do not break it** (SPEC §3, amended 2026-09-29): a
+plugin is a value the host passes under `:plugins`, merged as data by `expand`; nothing is
+discovered, registered or hooked, and a plugin contributes only keys a host could write
+itself. The day a plugin needs the base to call it on its own — a lifecycle, a hook, a
+middleware slot — is the day this rule is being broken.
 
 **2 · The membership test.** Before adding anything: *would a bicycle rental or a
 clinic's appointment book need this, unchanged?* If not, it does not belong here. This

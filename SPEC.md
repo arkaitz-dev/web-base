@@ -49,6 +49,19 @@ Applied here, in one direction only:
 So the host writes its wiring **explicitly**. Verbose and dull, and that is exactly
 what keeps every other module free.
 
+**Amended 2026-09-29, with the user: plugins, as values.** The user's direction —
+auth-base and db-base are *plugins* of web-base, the one library that is independent;
+login and logout are to be standard, brandable and used as a whole in every project —
+made the wiring every host repeated a thing to ship once. It ships without crossing the
+line above: a plugin is **a value the host passes** (`:plugins [...]`), made of the same
+keys a host writes — routes, sessionless routes, a dictionary, an asset root and its
+stylesheets, at most one subject function, login path and session. `expand` merges them
+into the plain config by fixed rules, refusing every collision by name, and the host's
+own keys win. The base discovers nothing, registers nothing, runs no plugin lifecycle
+and accepts no middleware or hook from one: it never calls a plugin that the host did
+not hand it, and the call it makes is the one it already made to the host's function.
+The host still decides and wires — in one line per plugin.
+
 **Corollary — no global mutable state.** No ambient `settings` module that code reads
 from wherever it happens to run. Configuration is **passed in**, so a component is a
 function of its inputs and not of the environment it woke up in. This is the second

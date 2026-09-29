@@ -5,6 +5,21 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.11.0 — unreleased
+
+- **Breaking:** `:assets`, `:stylesheets` and `:plugins` are the base's names now. A host
+  that kept its own values under them is refused at construction; rename them.
+- `:plugins [...]`: values a library prepares from the keys a host writes — `:routes`,
+  `:sessionless`, `:i18n {:dict …}`, one asset root, `:stylesheets`, and at most one
+  `:subject-fn`, `:login-path`, `:session` — merged by `wb/expand` into the plain config,
+  every collision refused by name, the host's own keys winning. Nothing is discovered: a
+  plugin is data the host hands over, one line each, and the base calls its functions
+  only where it already called the host's.
+- `:assets [{:path "/name/" :root "classpath/prefix"}]`: resource roots served beside
+  `/wb/`, before the session; `:stylesheets [...]`: linked by the shell after `wb.css`,
+  plugins' first and the host's last, on every page and error page drawn with the shell. A host links its
+  own CSS with `:stylesheets ["/app.css"]` instead of through `:head`.
+
 ## 0.10.1 — 2026-09-29
 
 - A native image of 0.10.0 died at boot: the rate floor reached each connector's

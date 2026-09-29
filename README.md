@@ -15,7 +15,8 @@ says how to use it.
 
 **A library you call, never a framework that calls you.** The host wires the
 modules explicitly. There is no plugin registry, no auto-discovery, no hook
-system, no ambient global state: configuration is passed in.
+system, no ambient global state: configuration is passed in. A plugin (since 0.11.0)
+is a value the host passes, not something the base finds — see "Plugins".
 
 **The membership test.** Before adding anything: would a bicycle rental or a
 clinic's appointment book need this, unchanged? If not, it does not belong here.
@@ -214,6 +215,9 @@ on demand.
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
 | `:sessionless` | `{"/health" handler "/api/" api}`: answered before the session — no session read or written, no CSRF, no locale, no subject; the request id, security headers and body limit still apply. A path ending in `/` takes everything under it (an exact path wins, a longer prefix over a shorter); `/` itself is refused. A handler may be a var; a path or prefix that covers one of `:routes` is refused |
 | `:max-body-bytes` | the largest request body read, `200000` by default — counted however it is sent, with a length or without; past it, a 413 (since 0.10.0) |
+| `:assets` | `[{:path "/name/" :root "classpath/prefix"}]`: resource roots served beside `/wb/`, before the session, with 304s; a path is one lower-case segment, never `/wb/`, never covering a route or a sessionless path (since 0.11.0) |
+| `:stylesheets` | `["/app.css"]`: linked by the shell after `wb.css`, a plugin's before the host's, on every page and error page drawn with the shell (since 0.11.0) |
+| `:plugins` | values contributing the keys above; see "Plugins" (since 0.11.0) |
 
 Every malformed or missing required value fails at construction, naming the key, and
 every refusal the base throws says `web-base:` first, so a host's log names who refused.
@@ -225,6 +229,34 @@ reitit's `create-resource-handler` options), and anything else fails at construc
 `{:config-key [:security :hts]}`, because a misspelt `:hts` would otherwise serve without
 HSTS and say nothing. `:cookie-attrs` is Ring's map and Ring refuses an unknown attribute
 itself, at the first cookie it writes.
+
+### Plugins
+
+A plugin is a value a library prepares from the keys you would otherwise write
+yourself — routes, sessionless routes, a dictionary, an asset root and its stylesheets,
+and at most one `:subject-fn`, `:login-path` and `:session` — and you hand it over:
+
+```clojure
+(wb/handler {:routes  (routes/app db)
+             :plugins [(db-web/plugin db {…}) (auth-web/plugin ceremony {…})]
+             :i18n    {:default-locale :es}})
+```
+
+`(wb/expand config)` answers the plain config the plugins stand for; `handler` builds
+from nothing else, so what a plugin adds is one call away at the REPL. The rules:
+routes are yours first, then each plugin's; sessionless paths, asset roots and
+stylesheets are unions, a path given twice refused; each plugin owns the dictionary keys
+it brings per locale, and your `:i18n :dict` is merged over them key by key, so you can
+reword any string a plugin ships; `:default-locale` and `:locale-fn` are yours alone;
+for `:subject-fn`, `:login-path` and `:session` your value wins (an explicit nil is no
+value), one plugin may supply a missing one, and two are refused. Every collision fails
+at construction, naming the plugins and the key. A plugin names one asset root, `{:path
+"/ab/" :root "…"}`, where yours is a vector of them. A plugin's routes are siblings of
+yours, not children: they bring their own layouts and gates and inherit none of yours.
+
+The base finds no plugin and calls none on its own: a plugin brings no middleware, no
+hook and no lifecycle, only keys you could have written. A library whose plugin needs
+more is asking the base to become a framework, which it will not.
 
 ### The wiring order
 

@@ -33,6 +33,7 @@
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.i18n :as i18n]
             [dev.arkaitz.web-base.log :as log]
+            [dev.arkaitz.web-base.plugin :as plugin]
             [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.security :as security]
@@ -350,19 +351,61 @@
         (handler request)))))
 
 (defn- with-assets
-  "Assets first — the base's `/wb/` before the host's, so a host file cannot
-  shadow the base's own — then the host's sessionless routes, then `app` for
-  everything else. Only the assets answer conditional GETs with a 304: the
-  resource handlers emit `Last-Modified` and nothing else honoured it, so every
-  page load re-sent htmx whole."
-  [static sessionless app]
+  "Assets first — the base's `/wb/` before any other, so nothing can shadow the base's
+  own, then each `:assets` root a plugin or the host named, then the host's sessionless
+  routes, then its `:static`, then `app` for everything else. Only the assets answer
+  conditional GETs with a 304: the resource handlers emit `Last-Modified` and nothing
+  else honoured it, so every page load re-sent htmx whole."
+  [assets static sessionless app]
   (apply ring/routes
          (remove nil? [(not-modified/wrap-not-modified base-assets)
+                       (when (seq assets)
+                         (apply ring/routes
+                                (for [asset assets]
+                                  (not-modified/wrap-not-modified (ring/create-resource-handler asset)))))
                        sessionless
                        (when static
                          (not-modified/wrap-not-modified
                           (ring/create-resource-handler (merge {:path "/"} static))))
                        app])))
+
+(def ^:private local-href
+  "A path on this origin. A browser reads a backslash as a slash and drops tabs and
+  newlines, so `/\\evil.example/x.css` is `//evil.example/x.css`: another origin's."
+  #"/[^/\\\s\p{Cntrl}][^\\\s\p{Cntrl}]*")
+
+(defn- check-assets!
+  "Every asset root well formed, no path twice, none covering a route or a sessionless
+  path — a stylesheet root that swallowed a page would serve it without its gate — and
+  every stylesheet a local path, given once. A root matches the decoded path while the
+  router matches the raw one, so `/p%2Fx` reaches a `/p/` root rather than a `/:x` route:
+  it can only ever answer with a file of that root, never a page."
+  [assets stylesheets router sessionless]
+  (doseq [[i asset] (map-indexed vector assets)]
+    (plugin/check-asset! asset [:assets i]))
+  (when-let [twice (first (for [[p c] (frequencies (map :path assets)) :when (< 1 c)] p))]
+    (throw (ex-info (str "web-base: asset path " twice " is given twice") {:config-key [:assets twice]})))
+  (doseq [{:keys [path]} assets]
+    (when (or (some #(covers? path %) (map first (r/routes router)))
+              (r/match-by-path router path)
+              (some #(str/starts-with? % path) (keys sessionless)))
+      (throw (ex-info (str "web-base: asset path " path " covers one of :routes or :sessionless; it would"
+                           " serve files where a page or a probe answers")
+                      {:config-key [:assets path]}))))
+  (when-not (and (or (nil? stylesheets) (sequential? stylesheets))
+                 (every? #(and (string? %) (re-matches local-href %)) stylesheets))
+    (throw (ex-info (str "web-base: :stylesheets is a vector of local paths, each starting with one /"
+                         " and holding no backslash, space or control character — never another origin's")
+                    {:config-key [:stylesheets]})))
+  (when-let [twice (first (for [[p c] (frequencies stylesheets) :when (< 1 c)] p))]
+    (throw (ex-info (str "web-base: stylesheet " twice " is given twice") {:config-key [:stylesheets twice]}))))
+
+(defn- wrap-stylesheets
+  "Puts `:wb/stylesheets` on every request, outermost, so the shell links them on a page
+  and on an error page alike."
+  [handler stylesheets]
+  (let [sheets (vec stylesheets)]
+    (fn [request] (handler (assoc request :wb/stylesheets sheets)))))
 
 (defn handler
   "Builds the Ring handler from the host's config:
@@ -388,14 +431,20 @@
                   covers one of :routes is refused, and so is `/` (optional)
     :max-body-bytes  the largest request body read, 200 000 by default; a route's
                   `:wb/multipart` sets its own (optional)
+    :assets       `[{:path \"/name/\" :root \"classpath/prefix\"}]`, served beside `/wb/`,
+                  before the session (optional)
+    :stylesheets  `[\"/app.css\"]`, linked by the shell after the base's own (optional)
+    :plugins      values that contribute these same keys, merged by `expand` (optional)
 
-  Unknown keys are the host's own business. Inside the maps the base owns —
+  Unknown keys are the host's own business — all but the names above, `:assets`,
+  `:stylesheets` and `:plugins` among them since 0.11.0. Inside the maps the base owns —
   `:session`, `:security` and its `:hsts`, `:i18n`, `:static` — an unknown key is
   refused, naming its path. Every failure of a required or malformed value is raised
   here, at construction."
-  [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless
-           max-body-bytes]
-    :as   config}]
+  [config]
+  (let [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless
+                max-body-bytes assets stylesheets]
+         :as   config} (plugin/expand config)]
   (require-key! config :routes)
   (require-key! config :session)
   (when (contains? security :proxy?)
@@ -429,6 +478,7 @@
                                                                coercion/coerce-request-middleware]}
                                            coercion (assoc :coercion coercion))})]
     (refuse-shadowing! router sessionless)
+    (check-assets! assets stylesheets router sessionless)
     (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
           multipart-for (multipart-spec router body-limit)]
     (-> (ring/ring-handler router (error/default-handler render-error))
@@ -443,14 +493,20 @@
         ;; base's rendered 500, not a raw exception at the adapter. Outside i18n, so it
         ;; renders without a negotiated locale.
         ((:wrap (error/middleware bare-error)))
-        (->> (with-assets static (sessionless-handler sessionless bare-error)))
+        (->> (with-assets assets static (sessionless-handler sessionless bare-error)))
         ;; Outside the assets and the sessionless routes, so no path reads a body the
         ;; limit has not seen. A body read past it throws the 413 datum wherever it is
         ;; read, and the error boundary around the reader renders it.
         (security/wrap-body-limit #(or (:max-body-bytes (multipart-for %)) body-limit) bare-error)
         (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)
-        (log/wrap-request-id (logged-path router))))))
+        (log/wrap-request-id (logged-path router))
+        (cond-> (seq stylesheets) (wrap-stylesheets stylesheets)))))))
+
+(def expand
+  "`(expand config)` → the plain config its `:plugins` stand for, merged by the rules of
+  `dev.arkaitz.web-base.plugin` — what `handler` builds from, to read at the REPL."
+  plugin/expand)
 
 (def redirect-for
   "`(redirect-for request path)`: a 303 for a navigation, an `HX-Redirect` for an htmx

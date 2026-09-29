@@ -6,7 +6,8 @@
   layout. Absent slots emit nothing.
 
   What the shell reads from `:request`, when the request carries it: the
-  negotiated locale for `lang` (SPEC §14), the CSP nonce for its own script
+  stylesheets of the config's `:stylesheets` and its plugins, linked after the base's
+  own and before `:head`; the negotiated locale for `lang` (SPEC §14), the CSP nonce for its own script
   tag and the CSRF token, sent on every htmx request as `X-CSRF-Token`
   through `hx-headers:inherited` on `<body>` (SPEC §15) — htmx 4 inherits
   nothing without the modifier. A `<script>` the host adds through `:head`
@@ -32,6 +33,7 @@
       [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
       (when title [:title title])
       [:link {:rel "stylesheet" :href css-path}]
+      (for [href (:wb/stylesheets request)] [:link {:rel "stylesheet" :href href}])
       [:script (cond-> {:src htmx-path :defer true} nonce (assoc :nonce nonce))]
       head]
      [:body (cond-> {} token (assoc (keyword "hx-headers:inherited") (csrf-headers token)))

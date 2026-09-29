@@ -6,7 +6,7 @@
   (:require [clojure.tools.logging :as log]
             [ring.adapter.jetty :as jetty])
   (:import [java.util.concurrent ExecutorService TimeoutException]
-           [org.eclipse.jetty.server HttpConnectionFactory Server ServerConnector]
+           [org.eclipse.jetty.server Connector HttpConnectionFactory Server ServerConnector]
            [org.eclipse.jetty.server.handler GracefulHandler]
            [org.eclipse.jetty.util BlockingArrayQueue VirtualThreads]
            [org.eclipse.jetty.util.thread QueuedThreadPool]))
@@ -42,8 +42,10 @@
   (fn [^Server server]
     (.setHandler server (GracefulHandler. (.getHandler server)))
     (.setStopTimeout server (long stop-timeout-ms))
-    (doseq [connector (.getConnectors server)
-            factory   (.getConnectionFactories connector)
+    ;; Typed: a reflective call has no metadata in a native image, and failed there at
+    ;; boot (found building the host template's binary on 0.10.0).
+    (doseq [^Connector connector (.getConnectors server)
+            factory              (.getConnectionFactories connector)
             :when     (instance? HttpConnectionFactory factory)]
       (.setMinRequestDataRate (.getHttpConfiguration ^HttpConnectionFactory factory) min-request-data-rate))
     (when host-configurator (host-configurator server))))

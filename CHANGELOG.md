@@ -5,6 +5,36 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.10.0 — unreleased
+
+- **Breaking:** `:security :proxy?` is refused, naming its replacement. It took the first
+  `X-Forwarded-For` entry, which the client writes: behind nginx, AWS, Heroku or Fly,
+  which append, anyone chose their own rate-limit bucket (measured: 12 sign-ins, no 429).
+  `:proxy-hops n` takes the entry `n` from the right; brackets and a port are removed.
+- **Breaking:** a request body larger than `:max-body-bytes` (200 000 by default) is a
+  413, whether it declares its length or not. Jetty's form limit never applied, since
+  Ring reads the body; four 1 GB POSTs filled a 4 GB heap.
+- **Breaking:** the gate sends a refused navigation to `login-path?next=<page>`;
+  `testing/gate-refusal?` accepts it.
+- **Breaking:** a response to a request with a subject, one that writes the session, or
+  one whose page read the CSRF token carries `Cache-Control: no-store` unless the
+  handler said how it may be cached.
+- **Breaking:** idle connections close after 30 s (Ring's default was 200 s) and a body
+  slower than 500 bytes a second is cut with a 408; responses no longer name Jetty's
+  version.
+- **Breaking:** a `:sessionless` path ending in `/` is a prefix answering its whole
+  subtree, where it was one exact path; `/` itself, and a prefix covering one of the
+  routes, are refused at construction.
+- **Breaking:** `:hsts :max-age` past a billion is refused as milliseconds: it is seconds.
+- A client that hangs up mid-body, or is cut for its rate, is one INFO line, never an
+  ERROR with a stack. Only a failure read through the request body counts: the same
+  Jetty exception from anything else is still an error.
+- Route data `:wb/multipart {:max-file-size n …}` parses a file upload for that route
+  alone, before CSRF, into temporary files deleted when the request ends;
+  `testing/visit` takes `{:files …}` on a POST, PUT or PATCH.
+- `wb/redirect-for`, the gate's redirect for a host's own detour; `response/health`, a
+  probe that answers `ok` or 503 and nothing else.
+
 ## 0.9.0 — 2026-09-29
 
 - **Breaking:** every request runs on a virtual thread of its own. With platform

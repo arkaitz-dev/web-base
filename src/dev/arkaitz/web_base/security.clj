@@ -13,7 +13,8 @@
             [ring.middleware.anti-forgery :as anti-forgery]
             [ring.middleware.anti-forgery.session :as anti-forgery-session]
             [ring.middleware.anti-forgery.strategy :as strategy])
-  (:import [java.security SecureRandom]
+  (:import [java.io FilterInputStream InputStream]
+           [java.security SecureRandom]
            [java.util Base64 Locale]))
 
 (defn- lower
@@ -42,7 +43,13 @@
                     {:config-key [:security :hsts] :value hsts})))
   (let [{:keys [max-age include-subdomains?]} hsts]
     (when-not (nat-int? max-age)
-      (throw (ex-info "web-base: security :hsts needs a non-negative integer :max-age"
+      (throw (ex-info "web-base: security :hsts needs a non-negative integer :max-age, in seconds"
+                      {:config-key [:security :hsts :max-age] :value max-age})))
+    ;; Seconds, the header's own unit, beside keys that are all milliseconds: a year
+    ;; written as 31536000000 would pass and be a thousand years. A billion seconds is
+    ;; thirty-one years; no HSTS policy asks for more.
+    (when (< 1000000000 max-age)
+      (throw (ex-info "web-base: security :hsts :max-age looks like milliseconds; HSTS max-age is seconds (a year is 31536000)"
                       {:config-key [:security :hsts :max-age] :value max-age})))
     (str "max-age=" max-age (when include-subdomains? "; includeSubDomains"))))
 
@@ -89,20 +96,130 @@
                        csp (assoc "Content-Security-Policy" (str/replace csp "{nonce}" nonce)))]
         (some-> response (update :headers add-missing headers))))))
 
-(defn- first-forwarded [value]
-  (some-> value (str/split #",") first str/trim not-empty))
+(defn private
+  "`response` with `Cache-Control: no-store` unless it already says how it may be cached.
+  For what is somebody's own — a signed-in page, a page carrying a session's CSRF token —
+  which a shared cache must never hand to the next visitor, nor a shared computer keep."
+  [response]
+  (some-> response (update :headers add-missing {"Cache-Control" "no-store"})))
+
+(def default-max-body-bytes
+  "The largest request body the base reads when the host names no other: 200 000 bytes,
+  Jetty's own form limit — which never applied here, because Ring reads the body itself
+  (`wrap-params`), so a single anonymous POST could fill the heap (measured: 1 GB raised
+  it by 2 GB; four at once, an OutOfMemoryError)."
+  200000)
+
+(defn- over-limit!
+  "The 413 a body past its limit is answered with, marked as the body's own failure."
+  []
+  (throw (ex-info "web-base: request body over its limit" {:type ::body :status 413})))
+
+(defn- implements?
+  "Whether `c` implements the interface named `interface`, by name: Jetty lives behind
+  server.clj alone (SPEC §10), so no Jetty class is imported here."
+  [^Class c interface]
+  (boolean (some #(= interface (.getName ^Class %)) (supers c))))
+
+(defn- quiet-cause
+  "The first throwable in `e`'s cause chain that Jetty marks as quiet — a client that
+  hung up mid-body, a body that arrived slower than the minimum rate — or nil."
+  [^Throwable e]
+  (some #(when (implements? (class %) "org.eclipse.jetty.io.QuietException") %)
+        (take-while some? (iterate #(.getCause ^Throwable %) e))))
+
+(defn- quiet-status
+  "The status Jetty's own `HttpException` carries, or 400."
+  [^Throwable t]
+  (or (when (implements? (class t) "org.eclipse.jetty.http.HttpException")
+        (let [code (try (.invoke (.getMethod (class t) "getCode" (make-array Class 0)) t (object-array 0))
+                        (catch Exception _ nil))]
+          (when (and (int? code) (<= 400 code 599)) code)))
+      400))
+
+(defn- lost!
+  "Rethrows a failure to read the body: marked as the body's own, with the status Jetty
+  gave it, when Jetty calls it the client's doing; untouched otherwise. Any exception,
+  not only an `IOException`: Jetty's rate floor throws its `BadMessageException`, a
+  runtime one, straight out of the read (measured)."
+  [^Exception e]
+  (if-let [quiet (quiet-cause e)]
+    (throw (ex-info "web-base: request body not received"
+                    {:type ::body :status (quiet-status quiet) :lost (.getName (class quiet))} e))
+    (throw e)))
+
+(defn body-failure
+  "The request body's own failure somewhere in `e`'s cause chain, as data — `{:status
+  413}` past its limit, `{:status s :lost class-name}` when the client did not send it —
+  or nil. Marked where the body is read, so a failure of anything else that merely looks
+  like Jetty's (an upstream client, a driver) is never mistaken for the client's."
+  [^Throwable e]
+  (some #(let [data (ex-data %)] (when (= ::body (:type data)) (dissoc data :type)))
+        (take-while some? (iterate #(.getCause ^Throwable %) e))))
+
+(defn- limited
+  "`in`, throwing the 413 once more than `limit` bytes have been read from it — the bound
+  for a body whose length was not declared, or was declared falsely — and marking a read
+  the client broke off. No mark: a reset would count the same bytes twice."
+  ^InputStream [^InputStream in limit]
+  (let [seen (volatile! 0)
+        note (fn [n] (when (pos? n) (when (< limit (vswap! seen + n)) (over-limit!))) n)]
+    (proxy [FilterInputStream] [in]
+      (read
+        ([] (let [b (try (.read in) (catch Exception e (lost! e)))] (when (<= 0 b) (note 1)) b))
+        ([bytes] (note (try (.read in ^bytes bytes) (catch Exception e (lost! e)))))
+        ([bytes off len] (note (try (.read in ^bytes bytes (int off) (int len)) (catch Exception e (lost! e))))))
+      (skip [n] (note (try (.skip in (long n)) (catch Exception e (lost! e)))))
+      (markSupported [] false)
+      (mark [_])
+      (reset [] (throw (java.io.IOException. "mark/reset not supported"))))))
+
+(defn wrap-body-limit
+  "Refuses a request body larger than `(limit-for request)` bytes with a 413: at once,
+  unread, when its declared length says so; otherwise as it is read, whoever reads it.
+  `render` answers the refusal made here, before anything else runs."
+  [handler limit-for render]
+  (fn [request]
+    (let [limit    (limit-for request)
+          declared (or (:content-length request)
+                       (some-> (get-in request [:headers "content-length"]) parse-long))]
+      (if (and declared (< limit declared))
+        (render {:status 413} request)
+        (handler (cond-> request (:body request) (update :body limited limit)))))))
+
+(defn- forwarded
+  "The entry `hops` from the right of a comma-separated forwarded header, trimmed, or nil
+  when the header has fewer entries: what the outermost of `hops` appending proxies saw.
+  The entries to its left were written by whoever the proxies talked to — for the client
+  address, the client itself."
+  [value hops]
+  (let [entries (some->> (some-> value (str/split #",")) (map str/trim) (remove str/blank?) vec)]
+    (when (<= hops (count entries))
+      (nth entries (- (count entries) hops)))))
+
+(defn- address
+  "`entry` as an address: brackets and a port taken off (`[2001:db8::1]:443`,
+  `203.0.113.7:51000`), as proxies write them. What remains is the proxy's spelling;
+  auth-base's limiter canonicalises it for its key."
+  [entry]
+  (let [[_ bracketed] (re-matches #"\[([^\]]+)\](?::\d+)?" entry)
+        [_ v4]        (re-matches #"(\d{1,3}(?:\.\d{1,3}){3}):\d+" entry)]
+    (or bracketed v4 entry)))
 
 (defn wrap-proxy
-  "Trusts `X-Forwarded-Proto` and `X-Forwarded-For` for `:scheme` and
-  `:remote-addr`. Only behind a proxy the host controls: anyone else can
-  send those headers. The first `X-Forwarded-For` entry is taken, which is
-  the one the client itself may have written before the proxy appended its
-  own — a host that must trust the address should read the last hop it
-  controls instead."
-  [handler]
+  "Trusts `X-Forwarded-For` and `X-Forwarded-Proto` for `:remote-addr` and `:scheme`,
+  behind `hops` proxies the host runs, each APPENDING what it saw — nginx's
+  `$proxy_add_x_forwarded_for`, AWS's load balancers, Heroku's and Fly's routers all do.
+  The entry `hops` from the right is the address the outermost of them saw; everything
+  to its left the client could have written. A header with fewer entries than `hops`
+  leaves the socket's address, and a request that did not come through the proxies is
+  never trusted beyond it. `X-Forwarded-Proto` is taken from its last entry whatever the
+  count: proxies overwrite it rather than append, so it holds one value, the nearest
+  proxy's. Only behind proxies the host controls: anyone else can send these headers."
+  [handler hops]
   (fn [request]
-    (let [proto (some-> (first-forwarded (get-in request [:headers "x-forwarded-proto"])) lower)
-          for   (first-forwarded (get-in request [:headers "x-forwarded-for"]))]
+    (let [proto (some-> (forwarded (get-in request [:headers "x-forwarded-proto"]) 1) lower)
+          for   (some-> (forwarded (get-in request [:headers "x-forwarded-for"]) hops) address)]
       (handler (cond-> request
                  (#{"http" "https"} proto) (assoc :scheme (keyword proto))
                  for                       (assoc :remote-addr for))))))
@@ -183,8 +300,11 @@
                     :strategy      (lazy-session-strategy)})]
     ;; A flag of this request's own: one made when the middleware was built would be
     ;; shared by every request after the first that used a token.
+    ;; A page that read the token is somebody's own, signed in or not.
     (fn [request]
-      (protected (assoc request ::csrf-used (volatile! false) ::csrf-fresh (volatile! nil))))))
+      (let [used     (volatile! false)
+            response (protected (assoc request ::csrf-used used ::csrf-fresh (volatile! nil)))]
+        (cond-> response @used private)))))
 
 (defn rotate-token
   "`request` carrying a fresh CSRF token for a response that rotates the session, and

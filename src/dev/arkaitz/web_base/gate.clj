@@ -9,7 +9,8 @@
   there is a subject and the predicate still says no. No `401`: a proper one
   needs `WWW-Authenticate`, and only whoever authenticates knows the scheme."
   (:require [clojure.string :as str]
-            [dev.arkaitz.web-base.htmx :as htmx]))
+            [dev.arkaitz.web-base.htmx :as htmx]
+            [dev.arkaitz.web-base.security :as security]))
 
 (defn subject-present?
   "The stock predicate: there is a subject. Presence is all the base ever
@@ -28,10 +29,16 @@
   effect. A lazy value was rejected — a `delay` is truthy, so `subject-present?` would
   admit anyone — and so were a per-route opt-out (the default 404 has no route) and a
   cached generation (revocation within N seconds instead of at the next request). A
-  route that needs no subject at all belongs in `:sessionless`."
+  route that needs no subject at all belongs in `:sessionless`.
+
+  A response to a request with a subject, or one that writes the session, gets
+  `Cache-Control: no-store` unless the handler said otherwise: it is somebody's own."
   [handler subject-fn]
   (fn [request]
-    (handler (assoc request :wb/subject (subject-fn request)))))
+    (let [subject  (subject-fn request)
+          response (handler (assoc request :wb/subject subject))]
+      (cond-> response
+        (or (some? subject) (contains? response :session)) security/private))))
 
 (def refusal-headers
   "A refusal depends on the session and on the kind of request: never cached,
@@ -39,18 +46,43 @@
   `testing/gate-refusal?`, which recognises a refusal by them."
   {"Vary" htmx/vary "Cache-Control" "no-store"})
 
-(defn- refuse [request {:keys [login-path render-error]}]
-  (cond
-    (subject-present? request)
-    (render-error {:status 403} request)
-
-    (htmx/partial-request? request)
-    (update (htmx/redirect login-path) :headers merge refusal-headers)
-
-    :else
+(defn redirect-for
+  "`request` sent to `path` the way the base sends a refused request to its login page:
+  a 303 for a navigation, an `HX-Redirect` for an htmx swap (a 303 there would be
+  followed and swapped into the target), uncached and varying on the htmx headers. For
+  a detour of the host's own — no organisation chosen yet — as route middleware after
+  the base's gate, which has already checked that somebody is signed in."
+  [request path]
+  (if (htmx/partial-request? request)
+    (update (htmx/redirect path) :headers merge refusal-headers)
     {:status  303
-     :headers (assoc refusal-headers "Location" login-path)
+     :headers (assoc refusal-headers "Location" path)
      :body    ""}))
+
+(def ^:private max-next
+  "The longest `next` the refusal carries, encoded: past it the refusal goes to the
+  login page alone. The page's URL, encoded, roughly triples, and Jetty's 8 KB response
+  header buffer answered a 6000-character query with a 500 (measured); 2048 keeps the
+  whole `Location` far inside it, and is longer than any page worth coming back to."
+  2048)
+
+(defn- with-next
+  "`login-path` carrying, as `next`, the page a refused navigation asked for, so the
+  sign-in can return there: only a GET or HEAD that is not a swap has such a page, and
+  only one whose address encodes within `max-next`. The path is the request's own,
+  local by construction; whoever reads `next` back must still check it, since anybody
+  can type one."
+  [login-path request]
+  (let [next (when (and (#{:get :head} (:request-method request)) (not (htmx/partial-request? request)))
+               (java.net.URLEncoder/encode (str (:uri request) (some->> (:query-string request) (str "?"))) "UTF-8"))]
+    (if (and next (<= (count next) max-next))
+      (str login-path (if (str/includes? login-path "?") "&" "?") "next=" next)
+      login-path)))
+
+(defn- refuse [request {:keys [login-path render-error]}]
+  (if (subject-present? request)
+    (render-error {:status 403} request)
+    (redirect-for request (with-next login-path request))))
 
 (defn middleware
   "reitit middleware compiled per route, over the route's data as reitit merged it

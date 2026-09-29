@@ -129,6 +129,26 @@ outside it. A child's own `:wb/gate` replaces the parent's, and a child's `nil` 
 not open it — reitit's merge keeps the parent's — so a page that must be public moves
 out of the group.
 
+A refused navigation — a GET or HEAD, not a swap — is sent to `login-path?next=<the
+page, with its query>` (since 0.10.0), so a sign-in can return there; a refused POST or
+swap goes to `login-path` alone, having no page to return to. The base never reads
+`next` back: whoever does must check it is a local path, since anybody can type one
+(auth-base does). Every response to a request with a subject, or one that writes the
+session, or whose page read the CSRF token, carries `Cache-Control: no-store` unless the
+handler said how it may be cached: it is somebody's own.
+
+A detour of the host's own — an organisation not chosen yet — is route middleware
+after the gate, sending the visitor away the way the gate does:
+
+```clojure
+(defn wrap-org [handler]
+  (fn [request]
+    (if (current-org request) (handler request) (wb/redirect-for request "/orgs"))))
+```
+
+A second `:wb/gate` would not do: a child's gate replaces its parent's, and the page
+would no longer check that anybody is signed in.
+
 ### Sessions
 
 The session travels in a cookie signed with a 16-byte key. Generate one once, in
@@ -190,9 +210,10 @@ on demand.
 | `:static` | `create-resource-handler` options for the host's assets, e.g. `{:root "public"}` |
 | `:error-layout` | slot function used for error pages: receives `:content`, `:request`, `:error` |
 | `:i18n` | `{:dict tempura-dict :default-locale k :locale-fn (fn [request] preferences)}` |
-| `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age n} :proxy? bool}` |
+| `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age seconds} :proxy-hops n}` — HSTS's `max-age` is seconds, the header's own unit (a year is `31536000`); a value past a billion is refused as milliseconds |
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
-| `:sessionless` | `{"/health" handler}`: exact paths, any method, answered before the session — no session read or written, no CSRF, no locale, no subject; the request id and security headers still apply. A handler may be a var; a path one of `:routes` also matches is refused |
+| `:sessionless` | `{"/health" handler "/api/" api}`: answered before the session — no session read or written, no CSRF, no locale, no subject; the request id, security headers and body limit still apply. A path ending in `/` takes everything under it (an exact path wins, a longer prefix over a shorter); `/` itself is refused. A handler may be a var; a path or prefix that covers one of `:routes` is refused |
+| `:max-body-bytes` | the largest request body read, `200000` by default — counted however it is sent, with a length or without; past it, a 413 (since 0.10.0) |
 
 Every malformed or missing required value fails at construction, naming the key, and
 every refusal the base throws says `web-base:` first, so a host's log names who refused.
@@ -210,8 +231,9 @@ itself, at the first cookie it writes.
 It is the product, so it is written down, outermost first:
 
 ```
-request-id → security headers → proxy (opt-in) → [assets, sessionless] → error boundary
-→ session → params → i18n → csrf → subject → router: error → gate → render → coercion → handler
+request-id → security headers → proxy (opt-in) → body limit → [assets, sessionless]
+→ error boundary → session → params → i18n → multipart (declared routes) → csrf → subject
+→ router: error → gate → render → coercion → handler
 ```
 
 The outer error boundary exists for what throws before the router — a session store
@@ -330,6 +352,29 @@ answers a swap with its fragment, 200, and a navigation with a 303 to the locati
 this relies on htmx 4 swapping a 422; under htmx 2 a host would have to allow it in
 `htmx.config.responseHandling`.
 
+**A file upload** is declared on its route (since 0.10.0), and only there is a
+`multipart/form-data` body parsed — to temporary files, and before CSRF has judged the
+request, since the token is one of its fields:
+
+```clojure
+["/avatar" {:wb/multipart {:max-file-size 1048576 :max-file-count 3}
+            :post (fn [request] (let [{:keys [filename size tempfile]} (get-in request [:multipart-params "photo"])] …))}]
+```
+
+`:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
+other fields included; `:max-body-bytes` bounds the whole body, and without it the route
+takes its file size plus the base's limit. A part past them, or a body past them as it is
+read, is the 413 page in the negotiated language; a body whose declared length is already
+past the route's bound is refused before it is read, with the base's own 413 page, since
+nothing inside has run. A no-JS form works as it is — `csrf-field` inside it — and a
+multipart body sent to a route that did not declare it is never parsed: CSRF refuses it.
+
+The files live for the request: they are deleted once the handler has answered, so move
+or copy what you keep before answering, and never answer with the temporary file itself.
+Because the parse runs before CSRF and before any gate, an anonymous POST to a declared
+route is written to disk while it is refused — bounded by the route's limit and removed
+when the refusal is sent.
+
 ### Internationalisation
 
 `:wb/tr` takes a resource id, `(tr :nav/home)`, an id with arguments,
@@ -375,6 +420,8 @@ POST, PUT or PATCH. A POST carries the token as its hidden field; `{:htmx? true}
 as the header with the headers of a swap, and leaves an `HX-Redirect` for the test to
 read. A PUT, PATCH or DELETE needs `{:htmx? true}`, since no browser form sends one, and
 a request with no token known throws instead of sending.
+`{:files {"photo" {:filename "a.png" :content-type "image/png" :bytes b}}}` sends the
+form as `multipart/form-data`, the CSRF field among its parts, as a browser does.
 `{:follow? false}` sends one request and follows nothing, for a test that asks *who*
 answered — a handler that redirects to a gated page lands on the login page exactly as
 the gate would — and the jar still takes what that response set.
@@ -387,8 +434,8 @@ rendered body — `(not (str/includes? body "&#39;"))` — is vacuous: it passes
 the page says. Assert on the spelling the renderer produces.
 
 `(testing/gate-refusal? response login-path)` says whether a response is the gate's
-refusal of somebody with no subject: a 303 for a navigation, an `HX-Redirect` for a
-swap, each with the refusal's own `Vary` and `Cache-Control: no-store`. Those headers
+refusal of somebody with no subject: a 303 for a navigation (with or without `next`), an
+`HX-Redirect` for a swap, each with the refusal's own `Vary` and `Cache-Control: no-store`. Those headers
 are what tell it from a handler that redirects to the login page by itself, so a host
 asserting "no private route is open" asks this rather than copying them.
 
@@ -471,7 +518,38 @@ refuses, naming `:virtual-threads?` — and on JDK 21 to 23 a virtual thread blo
 `synchronized` code pins the carrier it runs on, of which there is one per core: a driver
 that blocks that way brings the freeze back with fewer threads. JDK 24 removed that. In a
 GraalVM native image it runs as on the JVM — measured after 0.9.0's release on a generated
-project, a macOS binary and a static musl one, each signing somebody in.
+project, a macOS binary and a static musl one, each signing somebody in. On SQLite, whose
+driver waits for a lock in native code, a waiting write pins its carrier; keep a SQLite
+pool smaller than the cores, or set `:virtual-threads? false`.
+
+**What a slow or large request costs** (since 0.10.0). The base reads no body larger
+than `:max-body-bytes` (200 000 by default) — counted as it is read, so a body sent in
+chunks or with a false length is bounded too, and one declared too long is refused
+unread. Jetty's own form limit never applied: Ring reads the body itself. An idle
+connection is closed after 30 s (`:max-idle-time`; Ring's own default is 200 s), and a
+body arriving slower than 500 bytes a second is cut with a 408 — an idle timeout alone
+cannot end a client that sends one byte just inside it. A client that hangs up
+mid-body, or is cut, is one INFO line, never an ERROR with a stack. Responses do not
+name the server's version. A host that must accept slower clients lowers the rate in
+its `:configurator`, which runs after the base's; one that wants a cap on connections
+adds it there too — measured, a connection trickling a body holds about 45 KB:
+
+```clojure
+:configurator (fn [server] (.addBean server (org.eclipse.jetty.server.NetworkConnectionLimit. 2000 server)))
+```
+
+Jetty answers a malformed request, or one with headers too large, before any handler
+runs, so that 400 or 431 carries none of the base's headers.
+
+**Behind a proxy** (since 0.10.0, replacing `:proxy?`, which is refused by name):
+`:security {:proxy-hops n}` says how many proxies you run in front, each APPENDING the
+address it saw to `X-Forwarded-For` — nginx's `$proxy_add_x_forwarded_for`, AWS's load
+balancers, Heroku's and Fly's routers all do. The client address is the entry `n` from
+the right: what the outermost of your proxies saw; everything to its left the client
+could have written, which is how `:proxy?`'s first entry let anyone choose their own
+rate-limit bucket. One proxy is `1`; a CDN in front of a load balancer is `2`. Fewer
+entries than `n` leave the socket's address. `X-Forwarded-Proto` is read from its last
+entry. The address is the proxy's spelling, brackets and port removed.
 
 ### A native binary
 
@@ -534,6 +612,25 @@ with `-H:ConfigurationFileDirectories=native-config`.
 On macOS a Homebrew GraalVM is deliberately not linked, so the `java` on your
 PATH stays the one you had. Use it one command at a time with
 `JAVA_HOME=/opt/homebrew/opt/graalvm`, or call `native-image` by its full path.
+
+### An API beside the pages
+
+A `:sessionless` path ending in `/` takes everything under it, answered before the
+session (since 0.10.0): the place for an API authenticated per request — a bearer token,
+never the session cookie — with no CSRF to satisfy, and still the request id, security
+headers, body limit and error page. Its value can be a whole reitit application:
+
+```clojure
+:sessionless {"/health" (response/health #(db/ready? db 2))
+              "/api/"   (ring/ring-handler (ring/router api-routes) (constantly {:status 404 :body ""}))}
+```
+
+A prefix that covers one of `:routes` is refused. For a 401, auth-base's
+`(auth/unauthorized ceremony "Bearer realm=\"api\"")` names the scheme.
+`response/health` answers 200 `ok` while `ready?` is truthy and 503 otherwise, an
+exception logged (an `Error` is the base's 500); it says nothing else, since a probe is
+public. A prefix is matched segment by segment, so `"/acme/"` over a route `/:org/secret`
+is refused as well.
 
 ### Integrant
 

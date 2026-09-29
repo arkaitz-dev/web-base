@@ -14,6 +14,7 @@
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.log :as request-log]
             [dev.arkaitz.web-base.render :as render]
+            [dev.arkaitz.web-base.security :as security]
             [reitit.coercion :as coercion]
             [reitit.core :as r])
   (:import [java.util Locale]))
@@ -116,8 +117,16 @@
       nil)))
 
 (defn- datum-of [^Throwable e request]
-  (let [data (ex-data e)]
-    (case (:type data)
+  (let [data (ex-data e)
+        body (when-not (= ::error (:type data)) (security/body-failure e))]
+    (case (if body ::body (:type data))
+      ::body
+      (let [{:keys [status lost]} body]
+        (when lost
+          (log/info (str "request body not received: " lost " → " status)
+                    {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
+        {:status status})
+
       ::error
       (dissoc data :type)
 

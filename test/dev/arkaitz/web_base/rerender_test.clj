@@ -150,13 +150,13 @@
           r (:response (testing/visit b :post "/save-admin"))]
       (is (= [403 (page 403 (frag 403))] [(:status r) (:body r)]))
       (is (= 0 @runs))))
-  (testing "nobody signed in gets the gate's own redirect to the login, unchanged"
+  (testing "nobody signed in gets the gate's own redirect to the login, with the re-rendered page as next"
     (let [{:keys [app]} (fixture)
           b (ready app)
           r (app (-> (mock/request :post "/save-admin")
                      (mock/body {"__anti-forgery-token" (:token b)})
                      (assoc-in [:headers "cookie"] (str/join "; " (map (fn [[k v]] (str k "=" v)) (:jar b))))))]
-      (is (= [303 LOGIN "no-store" ""]
+      (is (= [303 (str LOGIN "?next=%2Fadmin") "no-store" ""]
              [(:status r) (get-in r [:headers "Location"]) (get-in r [:headers "Cache-Control"]) (:body r)])))))
 
 (deftest rerender-passes-through-what-is-not-a-plain-200

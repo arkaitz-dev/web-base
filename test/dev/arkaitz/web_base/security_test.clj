@@ -84,7 +84,7 @@
   (let [attempt (fn [hsts] (try (security/wrap-headers ok {:hsts hsts}) ::constructed
                                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))]
     (doseq [[hsts value] [[{} nil] [{:max-age -1} -1] [{:max-age "1"} "1"] [{:max-age 1.5} 1.5] [{:max-age nil} nil]]]
-      (is (= ["web-base: security :hsts needs a non-negative integer :max-age" {:config-key [:security :hsts :max-age] :value value}]
+      (is (= ["web-base: security :hsts needs a non-negative integer :max-age, in seconds" {:config-key [:security :hsts :max-age] :value value}]
              (attempt hsts))
           (str "refused: " (pr-str hsts))))
     (doseq [hsts [true 42]]
@@ -126,32 +126,46 @@
       (is (nil? out) (str "nil stays nil with " (pr-str config)))
       (is (re-matches NONCE (str (:wb/nonce @seen))) "and the handler was called with a nonce"))))
 
-(deftest wrap-proxy-takes-the-first-forwarded-proto-lowercased--only-http-or-https--else-leaves-scheme-alone
-  (let [proxy (security/wrap-proxy identity)]
-    (doseq [[value scheme] [["HTTPS, http" :https] ["https" :https] [" https " :https]]]
+(deftest wrap-proxy-takes-the-forwarded-proto-hops-from-the-right-lowercased--only-http-or-https--else-leaves-scheme-alone
+  (let [proxy (security/wrap-proxy identity 1)]
+    (doseq [[value scheme] [["http, HTTPS" :https] ["https" :https] [" https " :https]]]
       (let [original (mock/header req "X-Forwarded-Proto" value)]
         (is (= (assoc original :scheme scheme) (proxy original)) (str "proto " (pr-str value)))))
     (let [original (assoc (mock/header req "X-Forwarded-Proto" "http") :scheme :https)]
       (is (= (assoc original :scheme :http) (proxy original)) "http on an https request"))
-    (doseq [value ["gopher" "" ",https"]]
+    (doseq [value ["gopher" "" "https,"]]
       (let [original (mock/header req "X-Forwarded-Proto" value)]
-        (is (= original (proxy original)) (str "left alone: " (pr-str value)))))))
+        (is (= (if (= value "https,") (assoc original :scheme :https) original) (proxy original))
+            (str "left alone, or the last real entry: " (pr-str value)))))))
 
-(deftest wrap-proxy-takes-the-first-forwarded-for-trimmed--and-without-headers-the-request-is-untouched
-  (let [proxy (security/wrap-proxy identity)]
-    (doseq [[value addr] [["10.0.0.1, 10.0.0.2" "10.0.0.1"] ["  203.0.113.9  " "203.0.113.9"]]]
+(deftest wrap-proxy-takes-the-forwarded-for-hops-from-the-right--bare--and-short-headers-leave-the-socket
+  (let [one (security/wrap-proxy identity 1)
+        two (security/wrap-proxy identity 2)]
+    (doseq [[proxy value addr] [[one "6.6.6.6, 10.0.0.2" "10.0.0.2"]
+                                [two "6.6.6.6, 203.0.113.9, 10.0.0.2" "203.0.113.9"]
+                                [one "  203.0.113.9  " "203.0.113.9"]
+                                [one "6.6.6.6, [2001:db8::1]:443" "2001:db8::1"]
+                                [one "6.6.6.6, [2001:db8::1]" "2001:db8::1"]
+                                [one "6.6.6.6, 203.0.113.7:51000" "203.0.113.7"]
+                                [one "6.6.6.6, 2001:db8::7" "2001:db8::7"]]]
       (let [original (mock/header req "X-Forwarded-For" value)]
         (is (= (assoc original :remote-addr addr) (proxy original)) (str "for " (pr-str value)))))
-    (doseq [value ["" " , 1.2.3.4"]]
+    (doseq [[proxy value] [[one ""] [one " , "] [two "203.0.113.9"]]]
       (let [original (mock/header req "X-Forwarded-For" value)]
-        (is (= original (proxy original)) (str "left alone: " (pr-str value)))))
+        (is (= original (proxy original))
+            (str "fewer entries than hops leaves the socket's address — never a client-written one: " (pr-str value)))))
     (let [original (-> req (mock/header "X-Forwarded-Proto" "https") (mock/header "X-Forwarded-For" "203.0.113.9"))]
-      (is (= (assoc original :scheme :https :remote-addr "203.0.113.9") (proxy original)) "both headers"))
-    (is (= req (proxy req)) "no headers, no change")))
+      (is (= (assoc original :scheme :https :remote-addr "203.0.113.9") (one original)) "both headers"))
+    (is (= req (one req)) "no headers, no change")))
 
 ;; --- CSRF ------------------------------------------------------------------
 
 (def ^:private render-error (error/renderer {}))
+
+(def ^:private READ-TOKEN
+  "What `csrf-app`'s handler answers once through the stack: it read the token, so the
+  page is somebody's own and must not be cached."
+  {:status 200 :headers {"Cache-Control" "no-store"} :body "x"})
 
 (defn- csrf-app
   "A spy handler behind csrf behind the session over a memory store the test
@@ -184,12 +198,12 @@
 
 (deftest csrf-get-issues-a-token-on-the-request-and-stores-that-same-token-in-the-session
   (let [[app sessions sid t seen response] (established)]
-    (is (= {:status 200 :body "x"} (dissoc response :headers)))
+    (is (= READ-TOKEN (update response :headers select-keys ["Cache-Control"])))
     (is (some? sid) "a session cookie was issued")
     (is (re-matches #"[A-Za-z0-9+/]{80}" (str t)) "ring-anti-forgery 1.4.0's token shape: 60 random bytes, base64 unpadded")
     (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token t}} @sessions) "the session holds the token and nothing else")
     (is (= t (:anti-forgery-token @seen) (::bound @seen)) "the accessor reads what the library bound")
-    (is (= {:status 200 :body "x"} (app (with-sid req sid))) "a second GET with the cookie rewrites nothing")
+    (is (= READ-TOKEN (app (with-sid req sid))) "a second GET with the cookie rewrites nothing")
     (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token t}} @sessions) "same token, same session")))
 
 (deftest csrf-post-without-a-token-is-render-errors-403-datum--fragment-on-a-partial--page-on-a-navigation--text-otherwise
@@ -216,12 +230,12 @@
         post                 (with-sid (mock/request :post "/") sid)
         tampered             (str (if (= \A (first t)) "B" "A") (subs t 1))]
     (is (not= t t2) "precondition: two sessions, two tokens")
-    (is (= {:status 200 :body "x"} (app (mock/header post "X-CSRF-Token" t))) "the session's token in the header passes")
+    (is (= READ-TOKEN (app (mock/header post "X-CSRF-Token" t))) "the session's token in the header passes")
     (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token t}} @sessions) "a passing POST rewrites nothing")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header (mock/request :post "/") "X-CSRF-Token" t))) "token without its cookie")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header post "X-CSRF-Token" tampered))) "one character off")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header post "X-CSRF-Token" t2))) "another session's genuine token")
-    (is (= {:status 200 :body "x"} (app (mock/header post "X-CSRF-Token" t))) "control: the refusals did not erase the stored token")))
+    (is (= READ-TOKEN (app (mock/header post "X-CSRF-Token" t))) "control: the refusals did not erase the stored token")))
 
 (deftest csrf-form-field-passes-only-when-wrap-params-runs-before-csrf--and-the-field-is-the-one-csrf-field-renders
   (let [[_ sessions sid t] (established)
@@ -240,10 +254,10 @@
 (deftest csrf-safe-methods-need-no-token--every-other-method-does
   (let [[app _ sid t] (established)]
     (doseq [method [:get :head :options]]
-      (is (= {:status 200 :body "x"} (app (with-sid (mock/request method "/") sid))) (str (name method) " without token")))
+      (is (= READ-TOKEN (app (with-sid (mock/request method "/") sid))) (str (name method) " without token")))
     (doseq [method [:post :put :delete :patch]]
       (is (= {:status 403 :headers HTML :body PAGE-403} (app (with-sid (mock/request method "/") sid))) (str (name method) " without token"))
-      (is (= {:status 200 :body "x"} (app (mock/header (with-sid (mock/request method "/") sid) security/csrf-header t)))
+      (is (= READ-TOKEN (app (mock/header (with-sid (mock/request method "/") sid) security/csrf-header t)))
           (str (name method) " with the token under the name csrf-header publishes")))))
 
 (deftest csrf-field-and-csrf-header-are-the-literal-shapes-forms-and-the-shell-rely-on
@@ -265,7 +279,7 @@
         post   (testing/with-cookies (mock/request :post "/") first*)]
     (is (re-matches #"ring-session=[A-Za-z0-9%]+--[A-Za-z0-9%]+; Path=/; HttpOnly; SameSite=Lax; Secure" raw)
         (str "the cookie store sealed a session with the default attributes: " raw))
-    (is (= {:status 200 :body "x"} (app (mock/header post "X-CSRF-Token" t))) "cookie + token passes, session not re-sealed")
+    (is (= READ-TOKEN (app (mock/header post "X-CSRF-Token" t))) "cookie + token passes, session not re-sealed")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app post)) "cookie without token")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header (mock/request :post "/") "X-CSRF-Token" t))) "token without cookie")))
 
@@ -303,3 +317,69 @@
     (is (false? @flag) "no token on the request: the flag stays down")
     (security/csrf-token {::security/csrf-used flag :anti-forgery-token "T"})
     (is (true? @flag) "a token read: the flag is up")))
+
+(deftest hsts-max-age-in-milliseconds-is-refused--a-billion-seconds-is-the-edge
+  (let [attempt (fn [max-age] (try (security/wrap-headers identity {:hsts {:max-age max-age}}) ::built
+                                   (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))]
+    (is (= ["web-base: security :hsts :max-age looks like milliseconds; HSTS max-age is seconds (a year is 31536000)"
+            {:config-key [:security :hsts :max-age] :value 31536000000}]
+           (attempt 31536000000))
+        "a year in milliseconds, the mistake beside every -ms key")
+    (is (= ::built (attempt 1000000000)) "control: a billion seconds, thirty-one years, is still taken")
+    (is (vector? (attempt 1000000001)) "and one more is not")))
+
+;; --- the limited body stream ----------------------------------------------------------
+
+(deftest limited-throws-the-413-one-byte-past-the-limit-through-read--read-array--read-range--and-skip--and-supports-no-mark
+  (let [limited  @#'security/limited
+        source   (fn [n] (java.io.ByteArrayInputStream. (byte-array (range n))))
+        stream   (fn ^java.io.InputStream [n] (limited (source n) 4))
+        refusal  ["web-base: request body over its limit" {:type :dev.arkaitz.web-base.security/body :status 413}]
+        refused  (fn [f] (try (f) ::served (catch ExceptionInfo e [(ex-message e) (ex-data e)])))]
+    (let [s (stream 10)]
+      (is (= [0 1 2 3] (vec (repeatedly 4 #(.read s)))) "read(): the 4th byte is served, and they are the source's")
+      (is (= refusal (refused #(.read s))) "read(): the 5th throws the 413"))
+    (let [s   (stream 10)
+          buf (byte-array 4)]
+      (is (= [4 [0 1 2 3]] [(.read s buf) (vec buf)]) "read(byte[]): four bytes at the limit are served")
+      (is (= refusal (refused #(.read s (byte-array 1)))) "read(byte[]): one more throws"))
+    (is (= refusal (refused #(.read (stream 10) (byte-array 5)))) "read(byte[]): five at once throw")
+    (let [s   (stream 10)
+          buf (byte-array 10)]
+      (is (= [4 [0 1 2 3]] [(.read s buf 2 4) (vec (take 4 (drop 2 buf)))]) "read(byte[],off,len): four at the limit are served")
+      (is (= refusal (refused #(.read s buf 6 1))) "read(byte[],off,len): one more throws"))
+    (is (= refusal (refused #(.read (stream 10) (byte-array 10) 0 5))) "read(byte[],off,len): five at once throw")
+    (let [s (stream 10)]
+      (is (= 4 (.skip s 4)) "skip: four skipped at the limit")
+      (is (= refusal (refused #(.skip s 1))) "skip: one more throws, since skipped bytes were sent all the same"))
+    (let [s (stream 10)]
+      (.read s) (.read s (byte-array 2)) (.skip s 1)
+      (is (= refusal (refused #(.read s))) "the count is one sum across every arity: 1 + 2 + 1, then the 5th throws"))
+    (let [s (stream 4)]
+      (is (= [0 1 2 3 -1] (vec (repeatedly 5 #(.read s)))) "the end of a body exactly at the limit is -1, not a byte")
+      (is (= -1 (.read s (byte-array 8))) "nor is it counted by the array reads"))
+    (is (= 4 (.read (stream 4) (byte-array 8))) "what counts is what was returned, never what was asked for")
+    (let [s (stream 10)]
+      (is (false? (.markSupported s)) "no mark: a reset would count the same bytes twice")
+      (is (nil? (.mark s 1)) "mark does nothing")
+      (is (= "mark/reset not supported" (try (.reset s) nil (catch java.io.IOException e (ex-message e))))
+          "and reset refuses"))))
+
+(deftest limited-marks-a-read-the-client-broke-off-on-every-arity--and-leaves-any-other-failure-as-it-came
+  (let [limited  @#'security/limited
+        failing  (fn [boom] (proxy [java.io.InputStream] []
+                              (read ([] (throw boom)) ([_] (throw boom)) ([_ _ _] (throw boom)))
+                              (skip [_] (throw boom))))
+        caught   (fn [f] (try (f) ::none (catch Throwable t t)))
+        lost     {:status 400 :lost "org.eclipse.jetty.io.EofException"}]
+    (doseq [[arity f] [["read()" #(.read ^java.io.InputStream %)]
+                       ["read(byte[])" #(.read ^java.io.InputStream % (byte-array 4))]
+                       ["read(byte[],off,len)" #(.read ^java.io.InputStream % (byte-array 4) 0 4)]
+                       ["skip" #(.skip ^java.io.InputStream % 4)]]]
+      (let [boom (org.eclipse.jetty.io.EofException. "gone")
+            t    (caught #(f (limited (failing boom) 100)))]
+        (is (= lost (security/body-failure t)) (str arity ": the client's hang-up is the body's own failure, with its status"))
+        (is (identical? boom (ex-cause t)) (str arity ": carrying what Jetty threw")))
+      (let [boom (java.io.EOFException. "a driver's")]
+        (is (identical? boom (caught #(f (limited (failing boom) 100))))
+            (str arity ": anything Jetty does not call the client's passes through untouched"))))))

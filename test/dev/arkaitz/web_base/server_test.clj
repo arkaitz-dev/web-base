@@ -454,3 +454,157 @@
     (with-server {}
       (fn [_ pool] (is (= [50 8 60000 false true 8 Integer/MAX_VALUE] (read-pool pool))
                        "and ring-jetty-adapter's defaults without them")))))
+
+;; --- defaults for connections and bodies that come slowly -------------------------------
+
+(defn- read-config [handle]
+  (let [conn ^ServerConnector (first (.getConnectors ^Server (:server handle)))
+        cfg  (.getHttpConfiguration ^org.eclipse.jetty.server.HttpConnectionFactory
+                                    (.getConnectionFactory conn org.eclipse.jetty.server.HttpConnectionFactory))]
+    [(.getIdleTimeout conn) (.getMinRequestDataRate cfg) (.getSendServerVersion cfg)]))
+
+(deftest the-connector-idles-at-30-s-the-body-rate-floor-is-500-and-no-response-names-the-server--host-options-override
+  (let [seen (atom nil)]
+    (doseq [[opts expected label] [[{} [30000 500 false] "the base's defaults"]
+                                   [{:max-idle-time 1234 :send-server-version? true} [1234 500 true] "the host's options win"]
+                                   [{:max-idle-time nil} [30000 500 false] "an explicit nil is the default"]
+                                   [{:configurator (fn [s] (let [cfg (.getHttpConfiguration ^org.eclipse.jetty.server.HttpConnectionFactory
+                                                                                            (.getConnectionFactory ^ServerConnector (first (.getConnectors ^Server s))
+                                                                                                                   org.eclipse.jetty.server.HttpConnectionFactory))]
+                                                             (reset! seen (.getMinRequestDataRate cfg))
+                                                             (.setMinRequestDataRate cfg 0)))}
+                                    [30000 0 false] "a host configurator runs after the base's and can lower the rate"]]]
+      (let [handle (server/start app (assoc opts :port 0))]
+        (try (is (= expected (read-config handle)) label)
+             (finally (server/stop handle)))))
+    (is (= 500 @seen) "and it saw the base's 500 before changing it"))
+  (doseq [[opts server-header] [[{} nil] [{:send-server-version? true} ["Jetty(12.1.8)"]]]]
+    (let [handle (server/start app (assoc opts :port 0))]
+      (try (is (= server-header (get-in (http (:port handle) "GET" "/me") [:headers "server"]))
+               (str "Server header with " (pr-str opts) " (the control names Jetty's version: a bump changes it)"))
+           (finally (server/stop handle))))))
+
+(defn- capture-root
+  "Runs `f` with a logback appender on the ROOT logger, which sees every thread — Jetty's
+  included, which tools.logging's test factory cannot — and answers what it captured as
+  `[logger level has-throwable? message]`."
+  [f]
+  (let [context  ^ch.qos.logback.classic.LoggerContext (org.slf4j.LoggerFactory/getILoggerFactory)
+        root     (.getLogger context "ROOT")
+        captured (atom [])
+        appender (doto (proxy [ch.qos.logback.core.AppenderBase] []
+                         (append [^ch.qos.logback.classic.spi.ILoggingEvent event]
+                           (swap! captured conj [(.getLoggerName event) (str (.getLevel event))
+                                                 (some? (.getThrowableProxy event)) (.getFormattedMessage event)])))
+                   (.setContext context)
+                   (.start))]
+    (.addAppender root appender)
+    (try (f captured) (finally (.detachAppender root appender)))))
+
+(defn- slurp-app [rid seen]
+  (wb/handler {:routes [] :session {:key KEY} :csrf false
+               :sessionless {"/slurp" (fn [r] (reset! rid (:wb/request-id r))
+                                        (let [body (slurp (:body r))] (reset! seen (count body)) {:status 200 :body "ok"}))}}))
+
+(defn- raw-post
+  "Writes a POST of `n` declared bytes to /slurp by hand, sending `chunks` of it with
+  `pause-ms` between them, then reads the status line. `[status-line writer-outcome]`."
+  [port n chunks pause-ms]
+  (with-open [socket (doto (java.net.Socket. "127.0.0.1" (int port)) (.setSoTimeout 8000))]
+    (let [out    (.getOutputStream socket)
+          reader (future (.readLine (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream socket)))))
+          write  (fn [^String s] (.write out (.getBytes s "US-ASCII")) (.flush out))]
+      (write (str "POST /slurp HTTP/1.1\r\nHost: localhost\r\nContent-Length: " n "\r\n\r\n"))
+      (let [outcome (try (doseq [c chunks] (write c) (when (pos? pause-ms) (Thread/sleep (long pause-ms))))
+                         :all-sent
+                         (catch java.io.IOException _ :cut))]
+        [(deref reader 8000 ::no-status) outcome]))))
+
+(defn- settled [captured pred]
+  (let [end (+ (System/currentTimeMillis) 10000)]
+    (loop [] (cond (pred @captured) @captured
+                   (> (System/currentTimeMillis) end) @captured
+                   :else (do (Thread/sleep 20) (recur))))))
+
+(deftest a-body-trickling-below-500-bytes-a-second-is-cut-with-a-408-and-one-info-line--a-whole-body-passes
+  ;; 300 bytes in 10-byte chunks every 100 ms is 100 B/s. Jetty checks the rate on every
+  ;; read from the first byte; after the second chunk 20 bytes have arrived where 50 were
+  ;; due, so the read that follows it fails (measured at 107 ms). Scheduling delay only
+  ;; brings that forward. The 8 s and 10 s waits are hang guards, not the criterion.
+  (let [trickle (repeat 30 "xxxxxxxxxx")
+        norm    (fn [events] (mapv (fn [[l lvl t m]] [l lvl t (clojure.string/replace m #"\d+ms$" "<n>ms")]) events))
+        access? (fn [events] (some #(= "dev.arkaitz.web-base.log" (first %)) events))
+        run     (fn [opts chunks pause]
+                  (let [rid (atom nil) seen (atom nil)
+                        handle (server/start (slurp-app rid seen) (assoc opts :port 0))]
+                    (try (capture-root (fn [captured]
+                                         (let [[status outcome] (raw-post (:port handle) 300 chunks pause)]
+                                           {:status status :outcome outcome :rid @rid :seen @seen
+                                            :events (norm (settled captured access?))})))
+                         (finally (server/stop handle)))))]
+    (let [{:keys [status outcome rid seen events]} (run {} trickle 100)]
+      (is (= "HTTP/1.1 408 Request Timeout" status) "the trickle is answered 408")
+      (is (= :cut outcome) "and cut before the client finished sending it")
+      (is (nil? seen) "the handler never had the body")
+      (is (= [["dev.arkaitz.web-base.error" "INFO" false
+               (str "request body not received: org.eclipse.jetty.http.BadMessageException → 408 {:request-id " rid ", :uri /slurp}")]
+              ["dev.arkaitz.web-base.log" "INFO" false "POST /slurp 408 <n>ms"]]
+             events)
+          "logged as one INFO line and the access line: no ERROR, no stack, nothing from Jetty"))
+    (let [{:keys [status seen events]} (run {} [(apply str trickle)] 0)]
+      (is (= ["HTTP/1.1 200 OK" 300] [status seen]) "control: the same body at once is served whole")
+      (is (= [["dev.arkaitz.web-base.log" "INFO" false "POST /slurp 200 <n>ms"]] events) "with only its access line"))
+    (let [{:keys [status seen]} (run {:configurator (fn [s] (doseq [c (.getConnectors ^Server s)]
+                                                             (.setMinRequestDataRate
+                                                              (.getHttpConfiguration ^org.eclipse.jetty.server.HttpConnectionFactory
+                                                                                     (.getConnectionFactory ^ServerConnector c org.eclipse.jetty.server.HttpConnectionFactory))
+                                                              0)))}
+                                     trickle 100)]
+      (is (= ["HTTP/1.1 200 OK" 300] [status seen])
+          "control: with the rate floor off the same trickle is served, so the 408 above is the floor's"))))
+
+(deftest through-a-real-jetty-a-client-that-hangs-up-mid-body-is-one-info-line-no-error-no-stack
+  (let [rid (atom nil) seen (atom nil)
+        handle (server/start (slurp-app rid seen) {:port 0})]
+    (try
+      (capture-root
+       (fn [captured]
+         (with-open [socket (java.net.Socket. "127.0.0.1" (int (:port handle)))]
+           (let [out (.getOutputStream socket)]
+             (.write out (.getBytes "POST /slurp HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\n0123456789" "US-ASCII"))
+             (.flush out)
+             (Thread/sleep 200)))
+         (let [events (settled captured #(some (fn [e] (= "dev.arkaitz.web-base.log" (first e))) %))]
+           (is (= [["dev.arkaitz.web-base.error" "INFO" false
+                    (str "request body not received: org.eclipse.jetty.server.internal.HttpConnection$HttpEofException → 400 {:request-id "
+                         @rid ", :uri /slurp}")]
+                   ["dev.arkaitz.web-base.log" "INFO" false "POST /slurp 400 <n>ms"]]
+                  (mapv (fn [[l lvl t m]] [l lvl t (clojure.string/replace m #"\d+ms$" "<n>ms")]) events))
+               "one INFO line naming Jetty's own class, then the access line; no ERROR, no stack, nothing from Jetty"))))
+      (finally (server/stop handle)))))
+
+(deftest draining-sets-the-500-byte-floor-on-every-connectors-http-factory-not-only-the-first
+  ;; The base's configurator runs before a host's, so a connector a host adds is never
+  ;; its to see; the connectors ring-jetty-adapter builds — HTTP and, with :ssl-port,
+  ;; HTTPS — are, and this is the loop over them.
+  (let [server (Server.)
+        c1     (ServerConnector. server)
+        c2     (ServerConnector. server)
+        proxy  (ServerConnector. server ^"[Lorg.eclipse.jetty.server.ConnectionFactory;"
+                                 (into-array org.eclipse.jetty.server.ConnectionFactory
+                                             [(org.eclipse.jetty.server.ProxyConnectionFactory.)]))
+        rate   (fn [^ServerConnector c]
+                 (.getMinRequestDataRate (.getHttpConfiguration ^org.eclipse.jetty.server.HttpConnectionFactory
+                                                                (.getConnectionFactory c org.eclipse.jetty.server.HttpConnectionFactory))))
+        seen   (atom [])]
+    (doseq [c [c1 c2 proxy]] (.addConnector server c))
+    (.setHandler server (org.eclipse.jetty.server.handler.DefaultHandler.))
+    (is (= [0 0] (mapv rate [c1 c2])) "witness: Jetty's own default is no floor, on each")
+    (is (not (identical? (.getConnectionFactory c1 org.eclipse.jetty.server.HttpConnectionFactory)
+                         (.getConnectionFactory c2 org.eclipse.jetty.server.HttpConnectionFactory)))
+        "witness: each connector has a factory of its own, so setting one cannot set the other")
+    ((@#'server/draining 1234 (fn [s] (swap! seen conj (mapv rate [c1 c2])))) server)
+    (is (= [500 500] (mapv rate [c1 c2])) "both connectors carry the floor")
+    (is (= [[500 500]] @seen) "and the host's configurator, run after, sees both set")
+    (is (nil? (.getConnectionFactory proxy org.eclipse.jetty.server.HttpConnectionFactory))
+        "a connector with no HTTP factory is passed over, not an error")))

@@ -3,7 +3,24 @@
   base reads, with nothing else in them. `ok` carries Hiccup for the route's
   layouts; `see-other` is the redirect after a classic form. There is no
   `not-found` or `forbidden` here on purpose: those are `error/throw!`, so
-  they reach the error renderer and not the layout stack.")
+  they reach the error renderer and not the layout stack."
+  (:require [clojure.tools.logging :as log]))
+
+(defn health
+  "A handler for a health probe, for `:sessionless`: `ready?` is asked on every request,
+  and answers 200 `ok` when it is truthy and 503 when it is not or throws — the throw
+  logged, since a probe that says only 503 would leave the operator guessing. Plain text,
+  uncached, and nothing else in the body: a probe is public, and the state behind it is
+  the operator's to read, not the internet's."
+  [ready?]
+  (fn [_request]
+    (let [ok? (try (ready?)
+                   (catch Exception e
+                     (log/warn e "health check failed")
+                     false))]
+      {:status  (if ok? 200 503)
+       :headers {"Content-Type" "text/plain; charset=utf-8" "Cache-Control" "no-store"}
+       :body    (if ok? "ok" "unavailable")})))
 
 (defn ok
   "`{:status 200 :body body}`. `:slots` becomes `:wb/slots`, what the layouts

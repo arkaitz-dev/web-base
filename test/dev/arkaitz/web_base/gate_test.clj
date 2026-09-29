@@ -49,15 +49,20 @@
 (deftest wrap-subject-puts-the-subject-fn-result-on-every-request--public-routes-included
   (let [calls (atom [])
         spy   (fn [request] (swap! calls conj request) :s)]
-    (is (= {:uri "/x" :wb/subject :s} ((gate/wrap-subject identity spy) {:uri "/x"})) "the result lands under :wb/subject")
+    (is (= {:uri "/x" :wb/subject :s :headers {"Cache-Control" "no-store"}} ((gate/wrap-subject identity spy) {:uri "/x"}))
+        "the result lands under :wb/subject — and, echoed as the response here, a response with a subject is not cached")
     (is (= [{:uri "/x"}] @calls) "subject-fn is called once with the request as received"))
   (let [out ((gate/wrap-subject identity (constantly nil)) {:uri "/"})]
-    (is (= [true nil] [(contains? out :wb/subject) (:wb/subject out)]) "nil is still put on the request"))
-  (is (= {:uri "/" :wb/subject :s} ((gate/wrap-subject identity (constantly :s)) {:uri "/" :wb/subject :stale}))
+    (is (= [true nil false] [(contains? out :wb/subject) (:wb/subject out) (contains? out :headers)])
+        "nil is still put on the request, and an anonymous response is left cacheable"))
+  (is (= {:uri "/" :wb/subject :s :headers {"Cache-Control" "no-store"}}
+         ((gate/wrap-subject identity (constantly :s)) {:uri "/" :wb/subject :stale}))
       "a stale value is replaced")
   (is (= {:status 200 :body "hi nil"} (app (get* "/pub"))) "public route, anonymous: the handler sees nil")
-  (is (= {:status 200 :body "hi \"ana\""} (app (get* "/pub" "X-Subject" "ana"))) "public route handler sees :wb/subject")
-  (is (= {:status 200 :body "hi \"ana\""} (app (get* "/priv" "X-Subject" "ana"))) "gated route handler sees it too"))
+  (is (= {:status 200 :headers {"Cache-Control" "no-store"} :body "hi \"ana\""} (app (get* "/pub" "X-Subject" "ana")))
+      "public route handler sees :wb/subject, and its answer to somebody is not cached")
+  (is (= {:status 200 :headers {"Cache-Control" "no-store"} :body "hi \"ana\""} (app (get* "/priv" "X-Subject" "ana")))
+      "gated route handler sees it too"))
 
 (deftest subject-present?-is-presence-not-the-key-nor-truthiness
   (is (= [false false true true true true true]
@@ -73,7 +78,8 @@
         router     (ring/router [["/spy" {:wb/gate spy :get recorder}]] {:data {:middleware [(gate/middleware gate-opts)]}})
         app        (app-of router)
         original   (get* "/spy" "X-Subject" "ana")]
-    (is (= {:status 200 :body "hi \"ana\""} (app original)) "predicate true → handler response returned untouched")
+    (is (= {:status 200 :headers {"Cache-Control" "no-store"} :body "hi \"ana\""} (app original))
+        "predicate true → handler response returned, only marked uncacheable for its subject")
     (is (= @by-handler @by-pred) "the predicate sees exactly the request the handler sees")
     (is (= original (select-keys @by-pred (keys original))) "which carries everything the client sent")
     (is (= "ana" (:wb/subject @by-pred)) "and the subject"))
@@ -82,19 +88,24 @@
   ;; A refusal is what speaks htmx; a pass must not. Without this row a gate
   ;; that refused every fragment would be green — and an htmx swap of a gated
   ;; route is what the README teaches.
-  (is (= {:status 200 :body "hi \"ana\""} (app (get* "/priv" "X-Subject" "ana" "HX-Request" "true")))
-      "an htmx swap with the subject present passes untouched: no HX-Redirect, no fragment")
+  (is (= {:status 200 :headers {"Cache-Control" "no-store"} :body "hi \"ana\""} (app (get* "/priv" "X-Subject" "ana" "HX-Request" "true")))
+      "an htmx swap with the subject present passes: no HX-Redirect, no fragment")
   (is (= 403 (:status (app (get* "/never" "X-Subject" "ana")))) "predicate false with a subject → 403"))
 
 (deftest refusal-without-a-subject--303-on-a-navigation--hx-redirect-and-never-location-on-a-partial
-  (let [redirect {:status 303 :headers (assoc REFUSAL "Location" login) :body ""}
+  (let [back     {:status 303 :headers (assoc REFUSAL "Location" (str login "?next=%2Fpriv")) :body ""}
+        redirect {:status 303 :headers (assoc REFUSAL "Location" login) :body ""}
         hx       {:status 200 :headers (assoc REFUSAL "HX-Redirect" login) :body ""}]
-    (is (= redirect (app (get* "/priv"))) "navigation refusal is exactly 303 + Location, uncached, varying on htmx")
-    (is (= hx (app (get* "/priv" "HX-Request" "true"))) "htmx partial refusal is exactly 200 + HX-Redirect, no Location")
-    (is (= redirect (app (get* "/priv" "HX-Request" "true" "HX-Request-Type" "full"))) "history restore is a navigation → 303")
-    (is (= redirect (app (get* "/priv" "Accept" "text/plain"))) "Accept plays no part in a refusal")
-    (is (= redirect (app (get* "/priv" "Accept" "application/json"))) "an API client is refused the same way: no 401 (SPEC §9.2, the base cannot name a scheme)")
-    (is (= redirect (app (req :post "/priv"))) "a refused POST is a 303: the browser GETs the login page, never re-posts")
+    (is (= back (app (get* "/priv")))
+        "navigation refusal is exactly 303 + Location carrying the page as next, uncached, varying on htmx")
+    (is (= hx (app (get* "/priv" "HX-Request" "true"))) "htmx partial refusal is exactly 200 + HX-Redirect, no Location, no next")
+    (is (= back (app (get* "/priv" "HX-Request" "true" "HX-Request-Type" "full"))) "history restore is a navigation → 303 with next")
+    (is (= back (app (get* "/priv" "Accept" "text/plain"))) "Accept plays no part in a refusal")
+    (is (= back (app (get* "/priv" "Accept" "application/json"))) "an API client is refused the same way: no 401 (SPEC §9.2, the base cannot name a scheme)")
+    (is (= {:status 303 :headers (assoc REFUSAL "Location" (str login "?next=%2Fpriv%3Fq%3Da%26b%3D1")) :body ""}
+           (app (assoc (get* "/priv") :query-string "q=a&b=1")))
+        "the query string travels too, encoded")
+    (is (= redirect (app (req :post "/priv"))) "a refused POST is a 303 without next: there is no page to return to, only a form")
     (is (= hx (app (req :post "/priv" "HX-Request" "true"))) "a refused htmx POST gets HX-Redirect")
     (is (= hx (app {:request-method :get :uri "/priv" :headers {"hx-request" "true"}})) "hand-built lowercase header")))
 
@@ -108,7 +119,8 @@
         original (get* "/never" "X-Subject" "ana")
         out      (app original)
         [datum request] (deref seen 0 [::never ::never])]
-    (is (= {:status 999 :body "spy"} out) "the gate returns render-error's response")
+    (is (= {:status 999 :headers {"Cache-Control" "no-store"} :body "spy"} out)
+        "the gate returns render-error's response, uncacheable like every answer to a subject")
     (is (= {:status 403} datum) "render-error receives exactly {:status 403}")
     (is (= original (select-keys request (keys original))) "and the whole request the client sent")
     (is (= "ana" (:wb/subject request)) "subject included")))
@@ -154,3 +166,44 @@
       (testing label
         (is (= "PREDBOOM" (try (app request) ::no-throw (catch RuntimeException e (ex-message e))))
             "the predicate's exception escapes untouched")))))
+
+(deftest a-response-to-somebody-is-not-cached--unless-the-handler-says-how--and-an-anonymous-one-is-left-alone
+  (let [wrap (fn [response subject] ((gate/wrap-subject (constantly response) (constantly subject)) {:uri "/"}))]
+    (is (= {"Cache-Control" "no-store"} (:headers (wrap {:status 200 :body ""} "ana")))
+        "a subject's page gets no-store")
+    (is (= {"cache-control" "private, max-age=60"} (:headers (wrap {:status 200 :headers {"cache-control" "private, max-age=60"} :body ""} "ana")))
+        "a handler that said how, in any case of the name, is not overruled and gets no second header")
+    (is (= {"Cache-Control" "no-store"} (:headers (wrap {:status 303 :headers {} :body "" :session {:flash "saved"}} nil)))
+        "an anonymous response that writes the session is somebody's too")
+    (is (= {:status 200 :body ""} (wrap {:status 200 :body ""} nil))
+        "control: an anonymous response that writes nothing is untouched, so a public page stays cacheable")
+    (is (nil? (wrap nil "ana")) "a nil response stays nil")))
+
+(deftest redirect-for-sends-a-navigation-with-a-303-and-a-swap-with-hx-redirect--both-uncached
+  (is (= {:status 303 :headers (assoc REFUSAL "Location" "/orgs") :body ""} (gate/redirect-for (get* "/x") "/orgs"))
+      "a navigation")
+  (is (= {:status 200 :headers (assoc REFUSAL "HX-Redirect" "/orgs") :body ""} (gate/redirect-for (get* "/x" "HX-Request" "true") "/orgs"))
+      "an htmx swap: HX-Redirect and no Location htmx would follow and swap in"))
+
+(deftest a-login-path-with-a-query-gets-next-after-an-ampersand
+  (let [app (app-of (router {:login-path "/entrar?lang=eu" :render-error (fn [d _] {:status (:status d)})}))]
+    (is (= "/entrar?lang=eu&next=%2Fpriv" (get-in (app (get* "/priv")) [:headers "Location"])))))
+
+(deftest next-is-carried-at-2048-encoded-characters-and-dropped-past-it--measured-encoded-not-raw--and-a-head-carries-it-like-a-get
+  (let [app      (app-of (ring/router [["/priv" {:wb/gate gate/subject-present? :get hi :head hi}]]
+                                      {:data {:middleware [(gate/middleware gate-opts)]}}))
+        refused  (fn [method qs] (let [r (app (cond-> (mock/request method "/priv") qs (assoc :query-string qs)))]
+                                   [(:status r) (select-keys (:headers r) (keys REFUSAL)) (get-in r [:headers "Location"])]))
+        carried  (fn [encoded-qs] [303 REFUSAL (str login "?next=%2Fpriv%3F" encoded-qs)])
+        dropped  [303 REFUSAL login]
+        a        #(apply str (repeat % "a"))]
+    (is (= 2048 (count (str "%2Fpriv%3F" (a 2038)))) "witness: 2038 letters encode to exactly 2048 with the page")
+    (is (= (carried (a 2038)) (refused :get (a 2038))) "encoded 2048: carried")
+    (is (= dropped (refused :get (a 2039))) "encoded 2049: the login page alone")
+    (is (= 2047 (count (str "%2Fpriv%3F" (apply str (repeat 679 "%26")))))
+        "witness: 679 ampersands encode to 2047, and one more to 2050")
+    (is (= (carried (apply str (repeat 679 "%26"))) (refused :get (apply str (repeat 679 "&")))) "encoded 2047: carried")
+    (is (< (count (str "/priv?" (apply str (repeat 680 "&")))) 2048) "witness: 680 ampersands are far under 2048 raw")
+    (is (= dropped (refused :get (apply str (repeat 680 "&")))) "and 2050 encoded: dropped, the bound is on what is sent")
+    (is (= [303 REFUSAL (str login "?next=%2Fpriv")] (refused :head nil)) "a HEAD carries next like a GET")
+    (is (= dropped (refused :head (a 2039))) "and is bounded like one")))

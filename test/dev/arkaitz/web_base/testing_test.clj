@@ -335,7 +335,7 @@
         shape     (fn [r] [(:status r) (get-in r [:headers "Location"]) (get-in r [:headers "HX-Redirect"])])]
     (is (= {"Vary" "HX-Request, HX-Request-Type" "Cache-Control" "no-store"} gate/refusal-headers)
         "the refusal's headers, pinned by value so a change to them is seen here")
-    (is (= [303 "/login" nil] (shape nav)) "witness: the navigation refusal")
+    (is (= [303 "/login?next=%2Fpriv" nil] (shape nav)) "witness: the navigation refusal, carrying the page as next")
     (is (true? (testing/gate-refusal? nav "/login")) "is recognised")
     (is (= [200 nil "/login"] (shape hx)) "witness: the htmx refusal")
     (is (true? (testing/gate-refusal? hx "/login")) "is recognised")
@@ -347,6 +347,9 @@
     (is (false? (testing/gate-refusal? forbidden "/login")) "and is not a refusal of somebody with no subject")
     (is (= [false false] [(testing/gate-refusal? nav "/elsewhere") (testing/gate-refusal? hx "/elsewhere")])
         "a refusal to another login path is not this one")
+    (is (false? (testing/gate-refusal? nav "/log")) "nor to a path that merely starts the same")
+    (is (true? (testing/gate-refusal? (assoc-in nav [:headers "Location"] "/login") "/login"))
+        "a navigation refusal without next — a refused POST's — is recognised too")
     (is (false? (testing/gate-refusal? (assoc-in hx [:headers "Location"] "/login") "/login"))
         "an htmx refusal never carries a Location htmx would follow")
     (is (= [false false] [(testing/gate-refusal? (update nav :headers dissoc "Vary") "/login")
@@ -496,3 +499,25 @@
       (is (= 200 (:status (:response (testing/visit b :put "/echo" {:x "1"} {:htmx? true :headers {"X-Foreign" "2"}}))))
           "and a swap's PUT answered")
       (is (= [[:post "1"] [:put "2"]] @seen) "each carrying its header, a form's POST and a swap alike"))))
+
+(deftest visit-refuses-files-on-a-get-and-on-an-htmx-delete-naming-the-method--before-any-request-is-sent
+  (let [hits    (atom [])
+        spy     (fn [r] (swap! hits conj r) {:status 200 :headers {} :body ""})
+        b       (assoc (testing/browser spy) :token "t")
+        files   {"f" {:filename "a" :bytes (byte-array 1)}}
+        refused (fn [f] (try (f) ::sent (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))]
+    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a GET to /x has none" {:path "/x" :method :get}]
+           (refused #(testing/visit b :get "/x" nil {:files files})))
+        "a GET: refused naming the method")
+    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
+           (refused #(testing/visit b :delete "/x" nil {:htmx? true :files files})))
+        "an htmx DELETE, whose params go in the query: refused naming the method")
+    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
+           (refused #(testing/visit (testing/browser spy) :delete "/x" nil {:htmx? true :files files})))
+        "before the missing token is noticed")
+    (is (= [] @hits) "nothing was sent")
+    (testing/visit b :get "/x" nil {:files {}})
+    (is (= 1 (count @hits)) "control: an empty :files on a GET is no files, and is sent")
+    (testing/visit b :post "/x" nil {:files files})
+    (is (str/starts-with? (get-in (peek @hits) [:headers "content-type"]) "multipart/form-data; boundary=")
+        "control: a POST carries them")))

@@ -674,10 +674,25 @@ this base's product.
   and which would have nothing left to catch it if it threw — and without a negotiated
   locale, because i18n is inside. `:sessionless` routes use the same page.
 - **Behind a proxy**, opt-in: scheme and client address from `X-Forwarded-Proto` and
-  `X-Forwarded-For`, only when the host says the proxy is trusted.
+  `X-Forwarded-For`, only when the host says the proxy is trusted. Amended for 0.10.0,
+  2026-09-29 (a breaking change): `:proxy?` took the first entry, which the client
+  writes, so behind every proxy that appends — all the common ones — the login's rate
+  limit could be escaped at will (measured). `:proxy-hops n` takes the entry `n` from
+  the right, what the outermost trusted proxy saw; `:proxy?` is refused by name.
 
 **Out, by §5 and §6:** rate limiting, lockout after failed attempts, password hashing,
-second factors, authorisation, audit trails. Request size limits stay Jetty's defaults
-(200 KB forms, 8 KB headers), documented rather than wrapped.
+second factors, authorisation, audit trails.
+
+**Amended for 0.10.0, 2026-09-29:** "request size limits stay Jetty's defaults (200 KB
+forms, 8 KB headers), documented rather than wrapped" was false for forms: Jetty's form
+limit governs the servlet's own parameter parsing, which Ring never calls — Ring reads
+the body itself — so one anonymous POST could fill the heap (measured: 1 GB raised it by
+2 GB; four at once, an OutOfMemoryError; virtual threads remove the only cap there was).
+The base now bounds every body it reads, 200 000 bytes by default (`:max-body-bytes`),
+counted as it is read; a route's `:wb/multipart` declares its own. Jetty keeps its 8 KB
+header limit. It also closes idle connections after 30 s and cuts a body arriving slower
+than 500 bytes a second, a quiet end logged in one line; responses to somebody — a
+subject, a session written, a CSRF token read — are `no-store`; and a refused navigation
+carries the page as `next`.
 
 *(Nothing remains open in this document; what is left is implementation.)*

@@ -5,9 +5,9 @@
 
   The wiring convention IS the product, so here it is, outermost first:
 
-    request-id → security headers → proxy (opt-in)
+    request-id → security headers → proxy (opt-in) → body limit
     → [/wb/ assets → sessionless routes → host static → ] error boundary → session → params
-    → i18n → csrf → subject
+    → i18n → multipart (declared routes only) → csrf → subject
     → ring-handler
         router, per matched route: error → gate → render → coercion → handler
         default handler: 404 / 405 / nil-handler 500
@@ -16,7 +16,10 @@
   session cookie, and a cookie on an asset defeats shared caches. They still
   carry the request id and the security headers. So do the host's `:sessionless`
   routes — a health probe, a webhook — which read no session and write none, whatever
-  cookie arrives. Session sits outside subject
+  cookie arrives. The body limit sits outside all of them, so nothing reads more than
+  it allows; multipart sits outside csrf because the token is one of its fields, and
+  inside i18n so a refused upload's page speaks the negotiated language. Session sits
+  outside subject
   (the subject function reads the session) and outside csrf (the token lives
   in the session); params sits outside csrf because the token may arrive as a
   form field; i18n sits outside csrf so a refused request's error page speaks
@@ -35,6 +38,7 @@
             [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.server :as server]
             [dev.arkaitz.web-base.session :as session]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as tools-log]
             [reitit.core :as r]
@@ -42,7 +46,11 @@
             [reitit.ring.coercion :as coercion]
             [ring.util.codec :as codec]
             [ring.middleware.not-modified :as not-modified]
-            [ring.middleware.params :as params]))
+            [ring.middleware.multipart-params :as multipart]
+            [ring.middleware.params :as params]
+            [ring.util.request :as req])
+  (:import [java.io File]
+           [org.apache.commons.fileupload2.core FileUploadException]))
 
 (def subject-present?
   "The stock gate predicate."
@@ -142,7 +150,7 @@
   options. `:session`'s `:cookie-attrs` is Ring's, which refuses an unknown attribute on
   its own, at the first cookie it writes."
   {[:session]         #{:key :store :cookie-attrs :cookie-name}
-   [:security]        #{:frame-options :csp :hsts :proxy?}
+   [:security]        #{:frame-options :csp :hsts :proxy-hops}
    [:security :hsts]  #{:max-age :include-subdomains?}
    [:i18n]            #{:dict :default-locale :locale-fn}
    ;; `:paths` too: reitit reads it though its docstring does not list it.
@@ -164,16 +172,21 @@
   (ring/create-resource-handler {:path "/wb/" :root "dev/arkaitz/web_base/public"}))
 
 (defn- sessionless-handler
-  "The host's `:sessionless` routes, by exact path and any method, each inside the
-  base's error middleware so a throw renders the base's 500 rather than reaching the
-  server. A nil answer is a 500 too, logged: falling through to the next handler would
-  hand the request to the session this mount exists to avoid."
+  "The host's `:sessionless` routes, any method, each inside the base's error middleware
+  so a throw renders the base's 500 rather than reaching the server. A path ending in `/`
+  answers everything under it — an API mounted beside the pages — and an exact path wins
+  over it, the longest such prefix over a shorter one. A nil answer is a 500 too, logged:
+  falling through to the next handler would hand the request to the session this mount
+  exists to avoid."
   [routes render-error]
   (when (seq routes)
     (let [wrap     (:wrap (error/middleware render-error))
-          handlers (update-vals routes wrap)]
+          handlers (update-vals routes wrap)
+          prefixes (sort-by (comp - count) (filter #(str/ends-with? % "/") (keys routes)))
+          find     (fn [uri] (or (get handlers uri)
+                                 (some #(when (str/starts-with? uri %) (get handlers %)) prefixes)))]
       (fn [request]
-        (when-let [h (get handlers (:uri request))]
+        (when-let [h (find (:uri request))]
           (or (h request)
               (do (tools-log/error "sessionless handler returned nil" {:request-id (:wb/request-id request)
                                                                 :uri        (log/path-of request)})
@@ -182,18 +195,46 @@
 (defn- validate-sessionless! [routes]
   (when (some? routes)
     (when-not (and (map? routes)
-                   (every? #(and (string? %) (str/starts-with? % "/") (not (str/starts-with? % "/wb/"))) (keys routes))
+                   (every? #(and (string? %) (str/starts-with? % "/") (not= "/" %) (not (str/starts-with? % "/wb/")))
+                           (keys routes))
                    (every? #(or (fn? %) (var? %)) (vals routes)))
       (throw (ex-info (str "web-base: config :sessionless must be a map of path to handler, each path"
-                           " starting with / and none under /wb/, which is the base's")
+                           " starting with / and none under /wb/, which is the base's, nor / itself,"
+                           " which would take every page away from the session")
                       {:config-key [:sessionless]})))))
 
+(defn- covers?
+  "Whether the sessionless `prefix` answers some path the route `template` matches,
+  beyond the prefix itself, which `refuse-shadowing!` has already put to the router:
+  segment by segment, a segment holding a parameter anywhere — `:org`, `{org}`,
+  `acme-{id}`, `{ns/id}`, whose slash is no boundary — matching any segment. A
+  catch-all, always last, needs no case of its own: a prefix that reaches it is a path
+  the router matches, and one that stops short covers it as the route's remaining
+  segments do. Over-matching only refuses at construction; missing one would open a
+  gated page."
+  [prefix template]
+  (let [wild?    #(or (str/includes? % ":") (str/includes? % "{"))
+        segments #(rest (str/split % #"/"))]
+    ;; Only the template's braces are a parameter's: the prefix is a literal path, and
+    ;; collapsing a `{` in it would misalign its segments.
+    (loop [[p & ps :as pre] (segments prefix)
+           [t & ts :as tem] (segments (str/replace template #"\{[^}]*\}" "{}"))]
+      (cond (empty? pre) (boolean (seq tem))
+            (empty? tem) false
+            (or (= p t) (wild? t)) (recur ps ts)
+            :else false))))
+
 (defn- refuse-shadowing!
-  "A sessionless path the router also matches would serve that route with no gate, no
-  subject, no session and no CSRF — silently, and a gated page would be open. Refused at
-  construction, naming the path."
+  "A sessionless path the router also matches — or a sessionless prefix that covers one
+  of the router's routes — would serve that route with no gate, no subject, no session
+  and no CSRF: silently, and a gated page would be open. Refused at construction, naming
+  the path."
   [router routes]
-  (when-let [taken (first (sort (filter #(r/match-by-path router %) (keys routes))))]
+  (when-let [taken (first (sort (filter (fn [path]
+                                          (or (r/match-by-path router path)
+                                              (and (str/ends-with? path "/")
+                                                   (some #(covers? path %) (map first (r/routes router))))))
+                                        (keys routes))))]
     (throw (ex-info (str "web-base: config :sessionless path " taken " is also one of :routes;"
                          " it would be served without the route's gate, session or CSRF")
                     {:config-key [:sessionless taken]}))))
@@ -225,6 +266,89 @@
         (:template match)
         (:uri request)))))
 
+(defn- too-large! [^Throwable e]
+  (if (security/body-failure e)
+    (throw e)
+    (error/throw! {:status 413})))
+
+(def ^:private multipart-keys #{:max-file-size :max-file-count :max-body-bytes})
+
+(defn- multipart-spec
+  "`(fn [request] spec)`: the `:wb/multipart` spec of the route a `multipart/form-data`
+  request is for, or nil. Only declared routes parse a multipart body — to disk, and
+  before CSRF has judged the request, since the token is one of its fields — so an
+  anonymous upload to any other path is never written anywhere. Each spec is checked at
+  construction: `:max-file-size` required, `:max-file-count` and `:max-body-bytes`
+  optional, positive, no other key, and never under one method, where a match would not
+  see it. The body limit of a declared route is its `:max-body-bytes`, or its file size
+  plus the base's own limit, for the fields beside the file."
+  [router default-limit]
+  (doseq [[path data] (r/routes router)
+          :let [spec (:wb/multipart data)]]
+    (when-not (or (nil? spec) (and (map? spec) (every? multipart-keys (keys spec)) (pos-int? (:max-file-size spec))
+                   (every? #(or (nil? (get spec %)) (pos-int? (get spec %))) [:max-file-count :max-body-bytes])))
+      (throw (ex-info (str "web-base: route " path " has :wb/multipart " (pr-str spec) "; it takes "
+                           (pr-str (vec (sort multipart-keys))) ", positive numbers, :max-file-size required")
+                      {:config-key [:routes path :wb/multipart]})))
+    (doseq [[method method-data] (select-keys data ring/http-methods)
+            :when (and (map? method-data) (contains? method-data :wb/multipart))]
+      (throw (ex-info (str "web-base: route " path " sets :wb/multipart under " method
+                           "; put it on the route's own data")
+                      {:config-key [:routes path method :wb/multipart]}))))
+  (fn [request]
+    (when (= "multipart/form-data" (req/content-type request))
+      (when-let [spec (get-in (r/match-by-path router (:uri request)) [:data :wb/multipart])]
+        (update spec :max-body-bytes #(or % (+ (:max-file-size spec) default-limit)))))))
+
+(defn- request-store
+  "A multipart store writing each file to a temporary file of its own, noted in
+  `created` so the request can delete it when it ends. Ring's own store keeps them for
+  an hour, and the parse runs before CSRF or any gate has judged the request, so an
+  anonymous POST to a declared route would leave its upload on disk that long."
+  [created]
+  (fn [item]
+    (let [file (File/createTempFile "wb-upload-" nil)]
+      (swap! created conj file)
+      (io/copy (:stream item) file)
+      (-> (select-keys item [:filename :content-type])
+          (assoc :tempfile file :size (.length file))))))
+
+(defn- delete-all! [created]
+  (doseq [^File file @created]
+    (when-not (or (.delete file) (not (.exists file)))
+      (tools-log/warn "an uploaded temporary file could not be deleted" {:file (.getPath file)}))))
+
+(defn- wrap-multipart
+  "Parses the multipart body of a request whose route declared `:wb/multipart`, with its
+  limits, into `:multipart-params` and `:params`, where CSRF then reads its token. A part
+  too large, too many, or a body past the route's limit is the host's 413 page; a body
+  the client broke off answers as the base's body limit does. Uploaded files live for
+  the request: they are deleted once the response is returned, so a handler moves or
+  copies what it keeps before answering, and never answers with the file itself."
+  [handler spec-for render-error]
+  (let [parse ((:wrap (error/middleware render-error))
+               (fn [{::keys [spec created] :as request}]
+                 (try {::parsed (multipart/multipart-params-request
+                                 (dissoc request ::spec ::created)
+                                 (assoc (select-keys spec [:max-file-size :max-file-count])
+                                        :store (request-store created)))}
+                      ;; What Ring's own middleware answers 413 for: a part or body past
+                      ;; its limit (FileUploadException) and its own refusals, "Max file
+                      ;; count exceeded" among them, which it throws as ex-info. The body's
+                      ;; own failures, read through this parse, keep their status.
+                      (catch FileUploadException e (too-large! e))
+                      (catch clojure.lang.ExceptionInfo e (too-large! e)))))]
+    (fn [request]
+      (if-let [spec (spec-for request)]
+        (let [created (atom [])]
+          (try
+            (let [answer (parse (assoc request ::spec spec ::created created))]
+              (if-let [parsed (::parsed answer)]
+                (handler parsed)
+                answer))
+            (finally (delete-all! created))))
+        (handler request)))))
+
 (defn- with-assets
   "Assets first — the base's `/wb/` before the host's, so a host file cannot
   shadow the base's own — then the host's sessionless routes, then `app` for
@@ -246,7 +370,8 @@
     :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
                   inherited by nested routes (layouts concatenate, a child's gate replaces);
                   `:wb/log-path :template` logs the route's template instead of its path,
-                  for a path that carries a secret
+                  for a path that carries a secret; `:wb/multipart {:max-file-size n …}`
+                  parses a file upload for that route alone
     :session      `{:key base64-or-bytes}` or `{:store s}` (required)
     :subject-fn   request → subject or nil (default: always nil)
     :login-path   where a refusal without a subject goes (required iff a route has :wb/gate)
@@ -254,21 +379,36 @@
     :static       create-resource-handler options for the host's assets (optional)
     :error-layout slot function for error pages (optional)
     :i18n         `{:dict … :default-locale … :locale-fn …}` (optional)
-    :security     `{:frame-options … :csp … :hsts … :proxy? …}` (optional)
+    :security     `{:frame-options … :csp … :hsts {:max-age seconds} :proxy-hops n}` (optional)
     :csrf         false to disable the anti-forgery token (on for anything else, nil included)
-    :sessionless  `{\"/health\" handler}` — exact paths answered before the session, CSRF,
-                  i18n and subject, with the request id and security headers only; a
-                  handler is a function or a var, and a path one of :routes also
-                  matches is refused (optional)
+    :sessionless  `{\"/health\" handler \"/api/\" handler}` — answered before the session,
+                  CSRF, i18n and subject, with the request id, security headers and body
+                  limit only; a path ending in `/` takes everything under it, an exact
+                  path winning; a handler is a function or a var; a path or prefix that
+                  covers one of :routes is refused, and so is `/` (optional)
+    :max-body-bytes  the largest request body read, 200 000 by default; a route's
+                  `:wb/multipart` sets its own (optional)
 
   Unknown keys are the host's own business. Inside the maps the base owns —
   `:session`, `:security` and its `:hsts`, `:i18n`, `:static` — an unknown key is
   refused, naming its path. Every failure of a required or malformed value is raised
   here, at construction."
-  [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless]
+  [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless
+           max-body-bytes]
     :as   config}]
   (require-key! config :routes)
   (require-key! config :session)
+  (when (contains? security :proxy?)
+    (throw (ex-info (str "web-base: :security :proxy? took the first X-Forwarded-For entry, which the client"
+                         " writes; say :proxy-hops 1 behind one proxy that appends (nginx, a cloud load"
+                         " balancer), 2 behind a CDN and a load balancer")
+                    {:config-key [:security :proxy?]})))
+  (when-not (or (nil? (:proxy-hops security)) (pos-int? (:proxy-hops security)))
+    (throw (ex-info "web-base: :security :proxy-hops must be a positive number of proxies"
+                    {:config-key [:security :proxy-hops] :value (:proxy-hops security)})))
+  (when-not (or (nil? max-body-bytes) (pos-int? max-body-bytes))
+    (throw (ex-info "web-base: :max-body-bytes must be a positive number of bytes"
+                    {:config-key [:max-body-bytes] :value max-body-bytes})))
   (refuse-unknown-keys! config)
   (validate-sessionless! sessionless)
   ;; Explicit nils — a config map assembled from an absent setting — must not
@@ -289,9 +429,12 @@
                                                                coercion/coerce-request-middleware]}
                                            coercion (assoc :coercion coercion))})]
     (refuse-shadowing! router sessionless)
+    (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
+          multipart-for (multipart-spec router body-limit)]
     (-> (ring/ring-handler router (error/default-handler render-error))
         (gate/wrap-subject subject-fn)
         (cond-> csrf? (security/wrap-csrf render-error))
+        (wrap-multipart multipart-for render-error)
         (cond-> i18n (i18n/wrap i18n))
         params/wrap-params
         (session/wrap (:session config))
@@ -301,9 +444,18 @@
         ;; renders without a negotiated locale.
         ((:wrap (error/middleware bare-error)))
         (->> (with-assets static (sessionless-handler sessionless bare-error)))
-        (cond-> (:proxy? security) security/wrap-proxy)
+        ;; Outside the assets and the sessionless routes, so no path reads a body the
+        ;; limit has not seen. A body read past it throws the 413 datum wherever it is
+        ;; read, and the error boundary around the reader renders it.
+        (security/wrap-body-limit #(or (:max-body-bytes (multipart-for %)) body-limit) bare-error)
+        (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)
-        (log/wrap-request-id (logged-path router)))))
+        (log/wrap-request-id (logged-path router))))))
+
+(def redirect-for
+  "`(redirect-for request path)`: a 303 for a navigation, an `HX-Redirect` for an htmx
+  swap, uncached — how the gate sends a refused visitor away, for a host's own detour."
+  gate/redirect-for)
 
 (def start
   "`(start handler {:port n})` → `{:server s :port n}`."

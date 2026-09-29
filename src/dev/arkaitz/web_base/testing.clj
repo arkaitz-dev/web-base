@@ -169,14 +169,34 @@
                       {:path path :header owned})))
     lowered))
 
+(def ^:private boundary "wb-test-boundary-7MA4YWxkTrZu0gW")
+
+(defn- multipart-body
+  "The bytes of a `multipart/form-data` body with `fields` (name → string) and `files`
+  (name → `{:filename :content-type :bytes}`), as a browser's form sends them."
+  ^bytes [fields files]
+  (let [out  (java.io.ByteArrayOutputStream.)
+        text (fn [^String s] (.write out (.getBytes s "UTF-8")))]
+    (doseq [[k v] fields]
+      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (name k) "\"\r\n\r\n" v "\r\n")))
+    (doseq [[k {:keys [filename content-type bytes]}] files]
+      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (name k) "\"; filename=\"" filename "\"\r\n"
+                 "Content-Type: " (or content-type "application/octet-stream") "\r\n\r\n"))
+      (.write out ^bytes bytes)
+      (text "\r\n"))
+    (text (str "--" boundary "--\r\n"))
+    (.toByteArray out)))
+
 (defn- request-of
-  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers]}]
+  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers files]}]
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
-        body     (when (and (unsafe? method) (not (params-in-query? method)))
-                   (form-body (cond-> (vec params)
-                                (not htmx?) (conj ["__anti-forgery-token" token]))))
-        bytes    (some-> ^String body (.getBytes "UTF-8"))]
+        fields   (when (and (unsafe? method) (not (params-in-query? method)))
+                   (cond-> (vec params) (not htmx?) (conj ["__anti-forgery-token" token])))
+        [bytes type] (cond (and fields (seq files))
+                           [(multipart-body fields files) (str "multipart/form-data; boundary=" boundary)]
+                           fields
+                           [(.getBytes ^String (form-body fields) "UTF-8") "application/x-www-form-urlencoded; charset=UTF-8"])]
     (cond-> {:request-method method
              :uri            uri
              :scheme         :http
@@ -191,8 +211,8 @@
       qs    (assoc :query-string qs)
       bytes (-> (assoc :body (java.io.ByteArrayInputStream. bytes)
                        :content-length (alength ^bytes bytes)
-                       :content-type "application/x-www-form-urlencoded; charset=UTF-8")
-                (assoc-in [:headers "content-type"] "application/x-www-form-urlencoded; charset=UTF-8")
+                       :content-type type)
+                (assoc-in [:headers "content-type"] type)
                 (assoc-in [:headers "content-length"] (str (alength ^bytes bytes)))))))
 
 (defn- location [response]
@@ -226,6 +246,10 @@
     followed included, as a browser keeps sending its own. Names are lower-cased; one
     `visit` writes itself — host, cookie, content-type, content-length, the CSRF header
     or a swap's — throws, because setting it would fake what the test exercises.
+  - `{:files {\"photo\" {:filename \"a.png\" :content-type \"image/png\" :bytes b}}}` sends a
+    POST, PUT or PATCH as `multipart/form-data`, with its params and the CSRF field as
+    parts beside the files — what a form with a file input sends. On any other method it
+    throws, since there is no body to carry them.
   - `{:follow? false}` sends one request and follows nothing, for a test that asks who
     answered: a handler that redirects to a gated page lands on the login page exactly
     as the gate would. The jar still takes what the response set.
@@ -239,6 +263,10 @@
    (when (and (htmx-only? method) (not (:htmx? opts)))
      (throw (ex-info (str "web-base: a browser form sends only GET and POST — a "
                           (.toUpperCase (name method) Locale/ROOT) " to " path " is htmx's; pass {:htmx? true}")
+                     {:path path :method method})))
+   (when (and (seq (:files opts)) (not (#{:post :put :patch} method)))
+     (throw (ex-info (str "web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a "
+                          (.toUpperCase (name method) Locale/ROOT) " to " path " has none")
                      {:path path :method method})))
    (when (and (unsafe? method) (not (:token b)))
      (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
@@ -261,14 +289,19 @@
 
 (defn gate-refusal?
   "Whether `response` is the gate's refusal of a request with no subject, sent to
-  `login-path`: a 303 for a navigation, a 200 with `HX-Redirect` and no `Location` for
-  an htmx swap. The refusal's own headers are part of the test, because they are what
-  tell it from a handler that redirects to the login page by itself."
+  `login-path`: a 303 for a navigation — to `login-path` itself, or carrying the page it
+  asked for as `next` (since 0.10.0) — and a 200 with `HX-Redirect` to `login-path` and
+  no `Location` for an htmx swap. The refusal's own headers are part of the test,
+  because they are what tell it from a handler that redirects to the login page by
+  itself."
   [response login-path]
-  (let [headers (:headers response)]
+  (let [headers  (:headers response)
+        location (get headers "Location")]
     (boolean
      (and (every? (fn [[k v]] (= v (get headers k))) gate/refusal-headers)
-          (or (and (= 303 (:status response)) (= login-path (get headers "Location")))
+          (or (and (= 303 (:status response))
+                   (or (= login-path location)
+                       (some-> location (str/starts-with? (str login-path (if (str/includes? login-path "?") "&" "?") "next=")))))
               (and (= 200 (:status response))
                    (= login-path (get headers "HX-Redirect"))
                    (nil? (get headers "Location"))))))))

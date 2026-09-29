@@ -6,7 +6,7 @@
   (:require [clojure.tools.logging :as log]
             [ring.adapter.jetty :as jetty])
   (:import [java.util.concurrent ExecutorService TimeoutException]
-           [org.eclipse.jetty.server Server ServerConnector]
+           [org.eclipse.jetty.server HttpConnectionFactory Server ServerConnector]
            [org.eclipse.jetty.server.handler GracefulHandler]
            [org.eclipse.jetty.util BlockingArrayQueue VirtualThreads]
            [org.eclipse.jetty.util.thread QueuedThreadPool]))
@@ -18,6 +18,20 @@
   before killing it, with room left for the rest of a system's halt."
   10000)
 
+(def ^:private default-options
+  "What the base puts under the host's options. An idle connection is closed after 30 s —
+  Jetty's own default, which ring-jetty-adapter raises to 200 s, so eight thousand
+  clients trickling a body held 367 MB for over three minutes (measured) — and no
+  response names the server's version."
+  {:max-idle-time 30000 :send-server-version? false})
+
+(def ^:private min-request-data-rate
+  "Bytes a second below which Jetty gives up on a request body: Apache httpd's own
+  `mod_reqtimeout` MinRate. An idle timeout alone cannot end a client that sends one
+  byte just inside it; this does. Averaged from the first byte, so a legitimate upload's
+  pauses pass. A host that must take slower clients lowers it in its `:configurator`."
+  500)
+
 (defn- draining
   "A configurator that puts a `GracefulHandler` around the handler the adapter
   installed and gives Jetty the window, then runs the host's own, if any. The window is
@@ -28,6 +42,10 @@
   (fn [^Server server]
     (.setHandler server (GracefulHandler. (.getHandler server)))
     (.setStopTimeout server (long stop-timeout-ms))
+    (doseq [connector (.getConnectors server)
+            factory   (.getConnectionFactories connector)
+            :when     (instance? HttpConnectionFactory factory)]
+      (.setMinRequestDataRate (.getHttpConfiguration ^HttpConnectionFactory factory) min-request-data-rate))
     (when host-configurator (host-configurator server))))
 
 (defn- virtual-thread-pool
@@ -108,7 +126,7 @@
       (throw (ex-info "web-base: server option :stop-timeout-ms must be an integer from 0 to 2147483647 (milliseconds)"
                       {:config-key [:stop-timeout-ms] :value window})))
     (let [pool   (thread-pool options)
-          server (jetty/run-jetty handler (cond-> (-> options
+          server (jetty/run-jetty handler (cond-> (-> (merge default-options (into {} (remove (comp nil? val)) options))
                                                       (dissoc :stop-timeout-ms :virtual-threads?)
                                                       (assoc :join? false
                                                              :configurator (draining window configurator)))

@@ -39,6 +39,7 @@
     :login-path LOGIN
     :routes
     [["/" {:get (fn [_] {:status 200 :body "home"})}]
+     [LOGIN {:get (fn [_] {:status 200 :body "login page"})}]
      ["/login" {:post (fn [r] (session/rotate (response/see-other "/") {:user (get-in r [:form-params "user"])}))}]
      ["/things/:id" {:wb/layouts [layout]
                      :get (fn [r]

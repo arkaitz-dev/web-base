@@ -5,6 +5,15 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.13.0 — unreleased
+
+- **Breaking:** with a gate on any route, `:login-path` must be a page of the router — a
+  route that answers GET there and is not gated itself — or `handler` refuses to build,
+  naming `[:login-path]`. It used to send every refused visitor to a 404, or round a
+  loop, and say nothing until somebody signed out. A host `:login-path` that wins over a
+  plugin's while the plugin's login page stays where it mounted it is the case that
+  asked for it. Its query, if it has one, is ignored for the match.
+
 ## 0.12.0 — 2026-09-29
 
 - **Breaking:** `:i18n :locales` lists the languages the site speaks; without it, the

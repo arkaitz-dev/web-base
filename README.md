@@ -206,7 +206,7 @@ on demand.
 | `:routes` | reitit route data (required) |
 | `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs` and `:cookie-name` (default `ring-session`) optional |
 | `:subject-fn` | request → subject or nil; default: always nil |
-| `:login-path` | where a refusal without a subject goes; required iff a route has `:wb/gate` |
+| `:login-path` | where a refusal without a subject goes; required iff a route has `:wb/gate`, and then a route of the router that answers GET and is not gated itself (since 0.13.0) |
 | `:coercion` | a reitit coercion, passed through |
 | `:static` | `create-resource-handler` options for the host's assets, e.g. `{:root "public"}` |
 | `:error-layout` | slot function used for error pages: receives `:content`, `:request`, `:error` |

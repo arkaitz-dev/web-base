@@ -34,6 +34,9 @@
 
 (def ^:private routes
   [["/me"     {:get (fn [r] {:status 200 :body (pr-str (:session r))})}]
+   ;; The page a gated refusal leads to: since 0.13.0 the base refuses a :login-path no
+   ;; route answers GET at.
+   [LOGIN     {:get (fn [_] {:status 200 :body "login page"})}]
    ["/login"  {:post (fn [_] (session/rotate {:status 200 :body "in"} {:user "ann"}))}]
    ["/priv"   {:wb/gate wb/subject-present? :get (fn [r] {:status 200 :body (str "hi " (pr-str (:wb/subject r)))})}]
    ["/token"  {:get (fn [r] {:status 200 :body (security/csrf-token r)})}]
@@ -125,6 +128,7 @@
                             {:status 200 :body (str tag " " (pr-str (:wb/subject r)))}))
         app     (wb/handler (config :csrf false
                                     :routes [["/login" {:post (fn [_] (session/rotate {:status 200 :body "in"} {:user "ann"}))}]
+                                             [LOGIN {:get (h :login)}]
                                              ["/pub" {:get (h :pub)}]
                                              ["" {:wb/gate wb/subject-present?}
                                               ["/a" {:get (h :a)}]
@@ -423,7 +427,8 @@
 (deftest a-sessionless-prefix-that-covers-a-templated-route-is-refused-at-construction--a-sibling-and-a-same-name-leaf-are-not
   (let [h       (fn [_] {:status 200 :body "s"})
         attempt (fn [template prefix]
-                  (try (wb/handler (config :routes [[template {:wb/gate wb/subject-present? :get h}]] :sessionless {prefix identity}))
+                  (try (wb/handler (config :routes [[LOGIN {:get h}] [template {:wb/gate wb/subject-present? :get h}]]
+                                           :sessionless {prefix identity}))
                        ::built
                        (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         refusal (fn [prefix] [(str "web-base: config :sessionless path " prefix " is also one of :routes; it would be served"
@@ -530,7 +535,8 @@
        (mapv #(clojure.string/replace (:message %) #"\d+ms$" "<n>ms"))))
 
 (def ^:private marked-routes
-  [["/login/redeem/:token" {:wb/log-path :template
+  [[LOGIN {:get (fn [_] {:status 200 :body "login page"})}]
+   ["/login/redeem/:token" {:wb/log-path :template
                             :get (fn [r] (if (= "gone" (-> r :path-params :token)) {:status 404 :body ""} {:status 200 :body ""}))}]
    ["/things/:id" {:get (fn [_] {:status 200 :body ""})}]
    ["/priv/:token" {:wb/log-path :template :wb/gate wb/subject-present? :get (fn [_] {:status 200 :body ""})}]
@@ -1013,3 +1019,29 @@
              (mapv (juxt :level :message (comp ex-message :throwable))
                    (filter #(= 'dev.arkaitz.web-base.response (ns-name (:logger-ns %))) (lt/the-log))))
           "and is logged once with its cause"))))
+
+(deftest a-gated-router-refuses-a-login-path-that-is-not-a-page-it-serves
+  (let [ok      (fn [_] {:status 200 :body "x"})
+        gated   ["/priv" {:wb/gate wb/subject-present? :get ok}]
+        attempt (fn [cfg] (try (wb/handler (merge {:session {:key KEY}} cfg)) ::built
+                               (catch ExceptionInfo e [(ex-message e) (dissoc (ex-data e) :reitit.exception/cause)])))
+        nowhere (fn [p] [(str "web-base: :login-path " p " is not a page of this router — no route answers GET there,"
+                              " so every gated refusal would lead nowhere")
+                         {:config-key [:login-path]}])]
+    (is (= (nowhere "/in") (attempt {:routes [gated] :login-path "/in"}))
+        "no route there: every refusal would redirect to a 404")
+    (is (= (nowhere "/in") (attempt {:routes [gated ["/in" {:post ok}]] :login-path "/in"}))
+        "a route that answers only POST there is no page to land on")
+    (is (= [(str "web-base: :login-path /in is itself gated, so a refusal would redirect to a page that refuses too")
+            {:config-key [:login-path]}]
+           (attempt {:routes [gated ["/in" {:wb/gate wb/subject-present? :get ok}]] :login-path "/in"}))
+        "a gated login page would loop")
+    (is (= ::built (attempt {:routes [gated ["/in" {:get ok}]] :login-path "/in?from=gate"}))
+        "control: the page is matched without the login path's query")
+    (is (= ::built (attempt {:routes [["/open" {:get ok}]] :login-path "/nowhere"}))
+        "control: with no gate anywhere the login path leads nowhere and nothing is refused")
+    (is (= (nowhere "/entrar")
+           (attempt {:routes     [gated]
+                     :login-path "/entrar"
+                     :plugins    [{:wb.plugin/name :auth :routes [["/login" {:get ok}]] :login-path "/login"}]}))
+        "the case that asked for it: a host :login-path wins over a plugin's while the plugin's page stays at /login")))

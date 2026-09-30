@@ -374,6 +374,25 @@
   newlines, so `/\\evil.example/x.css` is `//evil.example/x.css`: another origin's."
   #"/[^/\\\s\p{Cntrl}][^\\\s\p{Cntrl}]*")
 
+(defn- check-login-path!
+  "With a gate anywhere, the `:login-path` it sends people to must be a page: a route of
+  this router that answers GET and is not gated itself. Otherwise every refusal is a
+  redirect to a 404, or a loop — silent until somebody signs out (since 0.13.0). A plugin
+  that mounts the login page and a host `:login-path` that wins over the plugin's while
+  its routes stay put is how it happens."
+  [router login-path]
+  (when (some (fn [[_ data]] (some? (:wb/gate data))) (r/routes router))
+    (let [path  (first (str/split login-path #"\?" 2))
+          match (r/match-by-path router path)]
+      (when-not (and match (get-in match [:result :get]))
+        (throw (ex-info (str "web-base: :login-path " login-path " is not a page of this router — no route"
+                             " answers GET there, so every gated refusal would lead nowhere")
+                        {:config-key [:login-path]})))
+      (when (some? (or (get-in match [:data :wb/gate]) (get-in match [:result :get :data :wb/gate])))
+        (throw (ex-info (str "web-base: :login-path " login-path " is itself gated, so a refusal would"
+                             " redirect to a page that refuses too")
+                        {:config-key [:login-path]}))))))
+
 (defn- check-assets!
   "Every asset root well formed, no path twice, none covering a route or a sessionless
   path — a stylesheet root that swallowed a page would serve it without its gate — and
@@ -479,6 +498,7 @@
                                                                coercion/coerce-request-middleware]}
                                            coercion (assoc :coercion coercion))})]
     (refuse-shadowing! router sessionless)
+    (check-login-path! router login-path)
     (check-assets! assets stylesheets router sessionless)
     (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
           multipart-for (multipart-spec router body-limit)]

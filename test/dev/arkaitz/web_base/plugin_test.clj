@@ -215,6 +215,12 @@
 (def ^:private priv
   ["/priv" {:wb/gate wb/subject-present? :get (fn [r] {:status 200 :body (str "hi " (pr-str (:wb/subject r)))})}])
 
+(def ^:private login-pages
+  "The pages either :login-path below leads to: since 0.13.0 the base refuses one no route
+  answers GET at."
+  [["/host-login" {:get (fn [_] {:status 200 :body "host login"})}]
+   ["/plug-login" {:get (fn [_] {:status 200 :body "plug login"})}]])
+
 (deftest a-plugins-routes-and-sessionless-paths-are-served--the-latter-before-the-session
   (let [reads  (atom 0)
         writes (atom 0)
@@ -246,24 +252,24 @@
                     :subject-fn     (constantly "plug")
                     :session        {:store (counting-store plug-reads w {})}}
         get*       (fn [app path] (app (mock/request :get path)))]
-    (let [app (wb/handler {:routes [priv] :login-path "/host-login" :subject-fn (constantly "host")
+    (let [app (wb/handler {:routes (into [priv] login-pages) :login-path "/host-login" :subject-fn (constantly "host")
                            :session {:store (counting-store host-reads w {})} :plugins [plugin]})]
       (is (= "hi \"host\"" (:body (get* app "/priv"))) "the host's :subject-fn is the one asked")
       (is (= [1 0] [@host-reads @plug-reads]) "and the host's :session store the one read"))
-    (let [app (wb/handler {:routes [priv] :login-path "/host-login" :session {:key KEY}
+    (let [app (wb/handler {:routes (into [priv] login-pages) :login-path "/host-login" :session {:key KEY}
                            :plugins [(assoc plugin :subject-fn (constantly nil))]})]
       (is (= "/host-login?next=%2Fpriv" (get-in (get* app "/priv") [:headers "Location"]))
           "the host's :login-path is where the gate sends a visitor"))
     (reset! plug-reads 0)
-    (let [cfg {:routes [priv] :plugins [plugin]}
+    (let [cfg {:routes (into [priv] login-pages) :plugins [plugin]}
           app (wb/handler cfg)]
       (is (not-any? cfg [:subject-fn :login-path :session]) "witness: the host gives none of the three")
       (is (= "hi \"plug\"" (:body (get* app "/priv"))) "the plugin's :subject-fn is the one asked")
       (is (= 1 @plug-reads) "and the plugin's :session store the one read"))
-    (let [app (wb/handler {:routes [priv] :plugins [(assoc plugin :subject-fn (constantly nil))]})]
+    (let [app (wb/handler {:routes (into [priv] login-pages) :plugins [(assoc plugin :subject-fn (constantly nil))]})]
       (is (= "/plug-login?next=%2Fpriv" (get-in (get* app "/priv") [:headers "Location"]))
           "and the plugin's :login-path is where the gate sends a visitor"))
-    (let [app (wb/handler {:routes [priv] :subject-fn nil :session {:key KEY} :plugins [plugin]})]
+    (let [app (wb/handler {:routes (into [priv] login-pages) :subject-fn nil :session {:key KEY} :plugins [plugin]})]
       (is (= "hi \"plug\"" (:body (get* app "/priv")))
           "an explicit nil in the host's config is no value: the plugin's is used"))))
 
@@ -351,7 +357,8 @@
         seen   (atom :unset)
         cfg    {:routes       [["" {:wb/layouts [layout]}
                                 ["/" {:get (fn [_] {:status 200 :body [:p "hi"]})}]
-                                ["/no" {:wb/gate (fn [_] false) :get (fn [_] {:status 200 :body "never"})}]]]
+                                ["/no" {:wb/gate (fn [_] false) :get (fn [_] {:status 200 :body "never"})}]
+                                ["/login" {:get (fn [_] {:status 200 :body [:p "login"]})}]]]
                 :session      {:key KEY}
                 :csrf         false
                 :subject-fn   (constantly "ann")

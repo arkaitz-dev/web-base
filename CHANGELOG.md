@@ -12,7 +12,9 @@ the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged 
   naming `[:login-path]`. It used to send every refused visitor to a 404, or round a
   loop, and say nothing until somebody signed out. A host `:login-path` that wins over a
   plugin's while the plugin's login page stays where it mounted it is the case that
-  asked for it. Its query, if it has one, is ignored for the match.
+  asked for it. A gate on a route or on one of its methods counts; the login path's query
+  or fragment is ignored for the match, and a login page on another origin — a single
+  sign-on's — is not checked.
 
 ## 0.12.0 — 2026-09-29
 

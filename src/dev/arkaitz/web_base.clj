@@ -379,10 +379,18 @@
   this router that answers GET and is not gated itself. Otherwise every refusal is a
   redirect to a 404, or a loop — silent until somebody signs out (since 0.13.0). A plugin
   that mounts the login page and a host `:login-path` that wins over the plugin's while
-  its routes stay put is how it happens."
+  its routes stay put is how it happens. A gate on a route or on one of its methods
+  counts. A login page on another origin — a single sign-on's — is not this router's to
+  check, and passes."
   [router login-path]
-  (when (some (fn [[_ data]] (some? (:wb/gate data))) (r/routes router))
-    (let [path  (first (str/split login-path #"\?" 2))
+  (when (and (string? login-path)
+             (str/starts-with? login-path "/")
+             (not (str/starts-with? login-path "//"))
+             (some (fn [[_ data]]
+                     (or (some? (:wb/gate data))
+                         (some #(some? (get-in data [% :wb/gate])) ring/http-methods)))
+                   (r/routes router)))
+    (let [path  (first (str/split login-path #"[?#]" 2))
           match (r/match-by-path router path)]
       (when-not (and match (get-in match [:result :get]))
         (throw (ex-info (str "web-base: :login-path " login-path " is not a page of this router — no route"

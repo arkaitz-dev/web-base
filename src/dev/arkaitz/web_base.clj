@@ -374,6 +374,17 @@
   newlines, so `/\\evil.example/x.css` is `//evil.example/x.css`: another origin's."
   #"/[^/\\\s\p{Cntrl}][^\\\s\p{Cntrl}]*")
 
+(defn- other-origin?
+  "Whether a browser takes `href` to another origin, read as it reads one: spaces and
+  controls trimmed from the ends, tabs and newlines dropped, a backslash taken for a
+  slash — then a scheme, or two slashes."
+  [href]
+  (let [read (-> href
+                 (str/replace #"^[\x00-\x20]+|[\x00-\x20]+$" "")
+                 (str/replace #"[\t\n\r]" "")
+                 (str/replace "\\" "/"))]
+    (boolean (re-find #"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)" read))))
+
 (defn- check-login-path!
   "With a gate anywhere, the `:login-path` it sends people to must be a page: a route of
   this router that answers GET and is not gated itself. Otherwise every refusal is a
@@ -384,8 +395,7 @@
   check, and passes."
   [router login-path]
   (when (and (string? login-path)
-             ;; Another origin: a scheme, or what a browser reads as one's missing half.
-             (not (re-find #"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//|/\\)" login-path))
+             (not (other-origin? login-path))
              (some (fn [[_ data]]
                      (or (some? (:wb/gate data))
                          (some #(some? (get-in data [% :wb/gate])) ring/http-methods)))

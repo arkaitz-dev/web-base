@@ -5,7 +5,7 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
-## 0.13.0 — unreleased
+## 0.13.0 — 2026-09-30
 
 - **Breaking:** with a gate on any route, `:login-path` must be a page of the router — a
   route that answers GET there and is not gated itself — or `handler` refuses to build,

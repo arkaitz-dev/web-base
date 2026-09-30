@@ -1052,7 +1052,7 @@
         "nor one written protocol-relative, which a browser also takes to another origin")
     (is (= ::built (attempt {:routes [gated] :login-path "/\\sso.example/login"}))
         "nor one whose backslash a browser reads as the second slash")
-    (doseq [other ["HTTPS://sso.example/login" " //sso.example/login" "\\\\sso.example/login"
+    (doseq [other ["HTTPS://sso.example/login" " //sso.example/login" "\u0001//sso.example/login" "\\\\sso.example/login"
                    "\\/sso.example/login" "/\t/sso.example/login"]]
       (is (= ::built (attempt {:routes [gated] :login-path other}))
           (str (pr-str other) " is another origin to a browser, as it reads an address")))

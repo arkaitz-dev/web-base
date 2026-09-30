@@ -376,11 +376,12 @@
 
 (defn- other-origin?
   "Whether a browser takes `href` to another origin, read as it reads one: spaces and
-  controls trimmed from the ends, tabs and newlines dropped, a backslash taken for a
-  slash — then a scheme, or two slashes."
+  controls trimmed from the start, tabs and newlines dropped, a backslash taken for a
+  slash — then a scheme, or two slashes. The end is never trimmed: only the start
+  decides."
   [href]
   (let [read (-> href
-                 (str/replace #"^[\x00-\x20]+|[\x00-\x20]+$" "")
+                 (str/replace #"^[\x00-\x20]+" "")
                  (str/replace #"[\t\n\r]" "")
                  (str/replace "\\" "/"))]
     (boolean (re-find #"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)" read))))

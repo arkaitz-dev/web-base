@@ -384,8 +384,8 @@
   check, and passes."
   [router login-path]
   (when (and (string? login-path)
-             (str/starts-with? login-path "/")
-             (not (str/starts-with? login-path "//"))
+             ;; Another origin: a scheme, or what a browser reads as one's missing half.
+             (not (re-find #"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//|/\\)" login-path))
              (some (fn [[_ data]]
                      (or (some? (:wb/gate data))
                          (some #(some? (get-in data [% :wb/gate])) ring/http-methods)))

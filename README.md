@@ -39,6 +39,22 @@ The library depends on `metosin/reitit-ring`, `hiccup`, `ring-jetty-adapter`,
 else reaches your classpath. Coercion is passed through: bring malli, spec or
 schema yourself.
 
+## Quick start
+
+```clojure
+(require '[dev.arkaitz.web-base :as wb] '[dev.arkaitz.web-base.response :as response])
+
+(def app (wb/handler {:routes  [["/" {:get (fn [_] (response/ok [:h1 "Hello"]))}]]
+                      :session {:key (System/getenv "WB_SESSION_KEY")}}))  ; (session/generate-key), once
+
+(def server (wb/start #'app {:port 3000}))
+```
+
+That is a page inside the default shell, with the security headers, a request id, CSRF
+and a signed session. Signing people in is auth-base's plugin, and a database with
+sessions in a row is db-base's: one line each under `:plugins`, shown in their READMEs.
+"A host, in full" below is every key at once; the sections after it are the reference.
+
 ## What it gives you
 
 - **Routing and a page shell.** Routes are reitit data. A route declares its

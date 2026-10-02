@@ -1,0 +1,5 @@
+{
+  "resources": [
+    {"glob": "dev/arkaitz/web_base/public/*"}
+  ]
+}

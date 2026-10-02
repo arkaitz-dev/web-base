@@ -609,7 +609,6 @@ native-image -cp $(clojure -Spath) \
   --initialize-at-build-time=org.slf4j \
   -H:+UnlockExperimentalVMOptions \
   -H:IncludeResourceBundles=jakarta.servlet.LocalStrings \
-  -H:IncludeResources='dev/arkaitz/web_base/public/[^/]+\.[a-z]+$' \
   -H:IncludeResources='public/.*[^/]\.[a-z]+$' \
   -o target/app my.app
 ```
@@ -621,10 +620,13 @@ Why each one, because a flag nobody can explain is a flag nobody can remove:
 - slf4j's logger factory reaches the image heap through `tools.logging`.
 - Jetty's servlet layer reads `jakarta.servlet.LocalStrings` when it writes a
   response; without the bundle every request answers `500`.
-- Without the resources the base's own CSS and htmx are not in the binary. The
-  second pattern is your own `:static` root.
+- The pattern is your own `:static` root, without which its files are not in
+  the binary. The base's own CSS and htmx need no flag (since 0.14.0): the jar
+  carries `META-INF/native-image/dev.arkaitz/web-base/reachability-metadata.json`,
+  which registers them, and GraalVM reads it from the classpath on its own. It
+  is data, so it holds no flag; the flags above stay yours.
 
-**Match files, not directories**, as those patterns do. A directory registered
+**Match files, not directories**, as that pattern and the jar's metadata do. A directory registered
 as a resource is served as a listing of its names: measured, `GET /css` on a
 host root containing `css/site.css` answered `200` with `site.css` where the
 jar answers `404`. The library refuses the spellings it can recognise — `/wb/`

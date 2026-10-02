@@ -5,6 +5,15 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.14.0 — unreleased
+
+- The jar carries its native-image metadata, registering its CSS and htmx — the files,
+  never their directory, which an image would serve as a listing. A host's image needs
+  no `-H:IncludeResources` for `dev/arkaitz/web_base/public`; remove that line, and the
+  traced entries naming it, from your configuration.
+- A plugin's dictionary refused for want of `:i18n :default-locale` now says the line to
+  paste, with a locale the plugins bring.
+
 ## 0.13.0 — 2026-09-30
 
 - **Breaking:** with a gate on any route, `:login-path` must be a page of the router — a

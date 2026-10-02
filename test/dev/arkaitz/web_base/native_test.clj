@@ -222,3 +222,35 @@
         {:keys [exit warnings]} (reflection-warnings files)]
     (is (< 10 (count files)) (str "precondition: the base's sources were found: " (count files)))
     (is (= [0 []] [exit warnings]) "every call in src is resolved at compile time")))
+
+;; --- the metadata the jar ships ---------------------------------------------
+
+(def ^:private metadata-path "META-INF/native-image/dev.arkaitz/web-base/reachability-metadata.json")
+
+(defn- metadata-globs
+  "The resource globs of the metadata on the classpath — where a jar carries it, so a file
+  left anywhere else is not found."
+  []
+  (some->> (io/resource metadata-path) slurp (re-seq #"\"glob\"\s*:\s*\"([^\"]+)\"") (mapv second)))
+
+(defn- glob-regex
+  "GraalVM's resource glob: `**` crosses directories, `*` stays within one."
+  [glob]
+  (re-pattern (-> (java.util.regex.Pattern/quote glob)
+                  (str/replace "**" "\\E.*\\Q")
+                  (str/replace "*" "\\E[^/]*\\Q"))))
+
+(deftest every-asset-the-jar-ships-is-registered-for-a-native-image--files-and-never-their-directory
+  (let [root  (io/file "resources")
+        files (->> (file-seq (io/file root "dev/arkaitz/web_base/public"))
+                   (filter #(.isFile ^File %))
+                   (mapv #(str/replace (str (.relativize (.toPath root) (.toPath ^File %))) "\\" "/")))
+        globs (metadata-globs)
+        hit?  (fn [path] (some #(re-matches (glob-regex %) path) globs))]
+    (is (seq globs) (str "the metadata is on the classpath at " metadata-path))
+    (is (= 2 (count files)) (str "witness: the stylesheet and htmx are read from resources/: " files))
+    (is (= [] (remove hit? files)) "every asset is matched by a glob")
+    (is (not (hit? "dev/arkaitz/web_base/public"))
+        "and the directory is not: a registered directory is served as a listing of its names")
+    (is (= [] (remove (fn [g] (some #(re-matches (glob-regex g) %) files)) globs))
+        "no glob names something the jar does not ship")))

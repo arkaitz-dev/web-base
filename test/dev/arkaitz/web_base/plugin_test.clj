@@ -147,11 +147,18 @@
   (testing "a plugin's dictionary, with the locale left unchosen"
     (doseq [[label i18n] [["the host has a :dict and no :default-locale" {:dict {:en {}}}]
                           ["the host has no :i18n at all" nil]]]
-      (is (= ["web-base: plugins bring dictionaries for [:en]; the host chooses the locale with :i18n :default-locale"
+      (is (= [(str "web-base: plugins bring dictionaries for [:en]; the host chooses the locale with"
+                   " :i18n :default-locale, as in :i18n {:default-locale :en}")
               {:config-key [:i18n :default-locale]}]
              (attempt #(plugin/expand (cond-> (assoc base :plugins [{:wb.plugin/name :p :i18n {:dict {:en {:k "P"}}}}])
                                         i18n (assoc :i18n i18n)))))
-          (str "refused, naming the key: " label)))
+          (str "refused, naming the key and a line to paste: " label)))
+    (is (= [(str "web-base: plugins bring dictionaries for [:es :eu]; the host chooses the locale with"
+                 " :i18n :default-locale, as in :i18n {:default-locale :es}")
+            {:config-key [:i18n :default-locale]}]
+           (attempt #(plugin/expand (assoc base :plugins [{:wb.plugin/name :p :i18n {:dict {:eu {:k "P"}}}}
+                                                          {:wb.plugin/name :q :i18n {:dict {:es {:k "Q"}}}}]))))
+        "the line suggests a locale the plugins do bring, never one they do not")
     (is (= {:en {:k "P"}}
            (get-in (plugin/expand (assoc base :i18n {:default-locale :en}
                                               :plugins [{:wb.plugin/name :p :i18n {:dict {:en {:k "P"}}}}]))

@@ -147,10 +147,11 @@
             sessionless (reduce (fn [acc p] (union-refusing acc (:sessionless p) (str "plugin " (:wb.plugin/name p)) :sessionless))
                                 (:sessionless config) plugins)]
         (when (and brought (nil? (get-in config [:i18n :default-locale])))
-          (fail! (str "plugins bring dictionaries for "
-                      (pr-str (vec (sort (distinct (mapcat #(keys (get-in % [:i18n :dict])) plugins)))))
-                      "; the host chooses the locale with :i18n :default-locale")
-                 [:i18n :default-locale]))
+          (let [locales (vec (sort (distinct (mapcat #(keys (get-in % [:i18n :dict])) plugins))))]
+            (fail! (str "plugins bring dictionaries for " (pr-str locales)
+                        "; the host chooses the locale with :i18n :default-locale, as in"
+                        " :i18n {:default-locale " (pr-str (first locales)) "}")
+                   [:i18n :default-locale])))
         (as-> (dissoc config :plugins) cfg
           (cond-> cfg
             (seq routes)      (assoc :routes routes)

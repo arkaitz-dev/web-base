@@ -5,7 +5,7 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
-## 0.15.0 — unreleased
+## 0.15.0 — 2026-10-06
 
 - `:session :renew {:every-ms :absolute-ms}`: a used session is written again, and its
   cookie sent again, once per `every-ms`, until `absolute-ms` after it was born. A page

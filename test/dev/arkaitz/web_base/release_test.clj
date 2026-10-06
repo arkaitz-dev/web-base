@@ -137,3 +137,80 @@
            carry neither message nor date"))
     (is (= "the message" (release/git dir "tag" "-l" "--format=%(contents:subject)" "v2.0.0"))
         "and it carries the message it was given")))
+
+;; --- verify-release! --------------------------------------------------------
+
+(def ^:private binary-bytes
+  "Every byte value once: a file a text round trip through git's output would change."
+  (byte-array (map unchecked-byte (range 256))))
+
+(defn- tagged
+  "A scratch repository with a source file, a text resource and a binary one, tagged
+  v1.0.0 and pushed with its tag."
+  []
+  (let [{:keys [dir] :as s} (scratch)]
+    (io/make-parents (io/file dir "src/a/core.clj"))
+    (spit (io/file dir "src/a/core.clj") "(ns a.core)\n")
+    (io/make-parents (io/file dir "resources/a/public/x.css"))
+    (spit (io/file dir "resources/a/public/x.css") "body{}\n")
+    (with-open [o (io/output-stream (io/file dir "resources/a/blob.bin"))] (.write o ^bytes binary-bytes))
+    (release/git dir "add" ".")
+    (release/git dir "commit" "-qm" "sources")
+    (release/git dir "push" "-q")
+    (release/git dir "tag" "-a" "v1.0.0" "-m" "1.0.0")
+    (release/git dir "push" "-q" "origin" "v1.0.0")
+    s))
+
+(defn- publish!
+  "A file:// Maven repository under `root` holding test.example/lib `version`: a jar of
+  `entries` ({path bytes-or-string}) with a pom naming `pom-version` and `pom-tag`.
+  Answers the repository's URL."
+  [root version entries {:keys [pom-version pom-tag] :or {pom-version version pom-tag "v1.0.0"}}]
+  (let [repo (str root "/maven")
+        base (io/file repo "test/example/lib" version)
+        pom  (str "<project><modelVersion>4.0.0</modelVersion><groupId>test.example</groupId>"
+                  "<artifactId>lib</artifactId><version>" pom-version "</version>"
+                  "<scm><tag>" pom-tag "</tag></scm></project>")]
+    (.mkdirs base)
+    (spit (io/file base (str "lib-" version ".pom"))
+          (str/replace pom (str "<version>" pom-version "</version>") (str "<version>" version "</version>")))
+    (with-open [jo (java.util.jar.JarOutputStream. (io/output-stream (io/file base (str "lib-" version ".jar"))))]
+      (doseq [[path content] (assoc entries "META-INF/maven/test.example/lib/pom.xml" pom)]
+        (.putNextEntry jo (java.util.jar.JarEntry. ^String path))
+        (.write jo ^bytes (if (string? content) (.getBytes ^String content "UTF-8") content))
+        (.closeEntry jo)))
+    (str "file://" repo)))
+
+(def ^:private exact
+  {"a/core.clj" "(ns a.core)\n" "a/public/x.css" "body{}\n" "a/blob.bin" binary-bytes})
+
+(defn- verdict
+  "`:verified`, or the `:check` of the refusal, for test.example/lib `version` from `url`,
+  fetched into a directory of its own each time."
+  [dir root url version]
+  (try (release/verify-release! dir {:lib 'test.example/lib :version version :tag "v1.0.0"
+                                     :local-dir (str root "/fetched-" (random-uuid)) :repo-url url})
+       (catch ExceptionInfo e (:check (ex-data e)))))
+
+(deftest verify-release!-accepts-a-jar-that-is-the-tag-byte-for-byte--and-names-each-way-one-is-not
+  (let [{:keys [dir root]} (tagged)]
+    (is (= :verified (verdict dir root (publish! root "1.0.0" exact {}) "1.0.0"))
+        "control: the jar is the tag, a binary file included, and it says so with a value")
+    (is (= :differs (verdict dir (str root "/d") (publish! (str root "/d") "1.0.0" (assoc exact "a/public/x.css" "body{x}\n") {}) "1.0.0"))
+        "a file whose bytes differ from the tag's")
+    (is (= :differs (verdict dir (str root "/b") (publish! (str root "/b") "1.0.0" (assoc exact "a/blob.bin" (byte-array (reverse binary-bytes))) {}) "1.0.0"))
+        "a binary file whose bytes differ")
+    (is (= :missing-from-jar (verdict dir (str root "/m") (publish! (str root "/m") "1.0.0" (dissoc exact "a/public/x.css") {}) "1.0.0"))
+        "a file of the tag the jar does not carry")
+    (is (= :not-in-tag (verdict dir (str root "/n") (publish! (str root "/n") "1.0.0" (assoc exact "a/extra.clj" "(ns a.extra)\n") {}) "1.0.0"))
+        "a file in the jar that is in neither src nor resources at the tag")
+    (is (= :pom (verdict dir (str root "/p") (publish! (str root "/p") "1.0.0" exact {:pom-tag "v0.9.9"}) "1.0.0"))
+        "a pom naming another tag")
+    (is (= :unresolvable (verdict dir (str root "/u") (publish! (str root "/u") "1.0.0" exact {}) "1.0.1"))
+        "a version nobody published")))
+
+(deftest verify-release!-refuses-a-tag-the-remote-does-not-have
+  (let [{:keys [dir root]} (tagged)]
+    (release/git dir "push" "-q" "origin" ":refs/tags/v1.0.0")
+    (is (= "" (release/git dir "ls-remote" "--tags" "origin" "v1.0.0")) "precondition: the tag is only here")
+    (is (= :tag-not-on-remote (verdict dir root (publish! root "1.0.0" exact {}) "1.0.0")))))

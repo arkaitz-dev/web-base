@@ -18,7 +18,8 @@
   so it fails **open** — publishing in precisely the case it was written to
   stop. `b/process` returns `{:exit :out :err}`, and every call below reads the
   exit code."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.tools.build.api :as b]))
 
 (defn git
@@ -71,3 +72,95 @@
   (git dir "tag" "-a" tag "-m" message)
   (git dir "push" "origin" tag)
   tag)
+
+;; --- after the deploy ---------------------------------------------------------
+
+(defn- git-bytes
+  "The bytes of `path` at `rev` in `dir`, exactly, or an `ex-info`. `git` answers
+  text, which would quietly re-encode a binary file; this reads the stream as it
+  comes. Bounded: a git that has not finished in a minute is an error."
+  ^bytes [dir rev path]
+  (let [pb (cond-> (ProcessBuilder. ^java.util.List ["git" "show" (str rev ":" path)])
+             dir (.directory (java.io.File. ^String dir)))
+        p  (.start (.redirectError pb java.lang.ProcessBuilder$Redirect/DISCARD))
+        out (.readAllBytes (.getInputStream p))]
+    (when-not (.waitFor p 60 java.util.concurrent.TimeUnit/SECONDS)
+      (.destroyForcibly p)
+      (throw (ex-info (str "git show " rev ":" path " did not finish") {:path path})))
+    (when-not (zero? (.exitValue p))
+      (throw (ex-info (str "git show " rev ":" path " failed with exit " (.exitValue p)) {:path path})))
+    out))
+
+(defn- shipped-at
+  "`{jar-path tree-path}` for every file under src/ and resources/ at `tag`: what the
+  jar must hold, and where each entry came from."
+  [dir tag]
+  (let [files (str/split-lines (git dir "ls-tree" "-r" "--name-only" tag "--" "src" "resources"))
+        pairs (for [f files :when (seq f)] [(str/replace-first f #"^(src|resources)/" "") f])
+        twice (->> pairs (group-by first) (filter #(< 1 (count (val %)))) keys sort)]
+    (when (seq twice)
+      (throw (ex-info (str "release: " (first twice) " is in both src and resources, so the jar cannot say which")
+                      {:check :ambiguous :paths (vec twice)})))
+    (into {} pairs)))
+
+(defn- jar-entries
+  "`{path bytes}` of every file in `jar`, but the manifest and the pom tools.build
+  writes, which come from the build and not from the tree."
+  [^java.io.File jar]
+  (with-open [jf (java.util.jar.JarFile. jar)]
+    (into {}
+          (for [^java.util.jar.JarEntry e (enumeration-seq (.entries jf))
+                :let [n (.getName e)]
+                :when (not (or (.isDirectory e) (= n "META-INF/MANIFEST.MF") (str/starts-with? n "META-INF/maven/")))]
+            [n (with-open [in (.getInputStream jf e)] (.readAllBytes in))]))))
+
+(defn- pom-of [^java.io.File jar lib]
+  (with-open [jf (java.util.jar.JarFile. jar)]
+    (when-let [e (.getEntry jf (str "META-INF/maven/" (namespace lib) "/" (name lib) "/pom.xml"))]
+      (with-open [in (.getInputStream jf e)] (slurp in)))))
+
+(defn- refuse-release! [message data]
+  (throw (ex-info (str "release not verified: " message) data)))
+
+(defn- fetch!
+  "Copies `url` to `file`, bounded: thirty seconds to connect and to each read. Answers
+  whether there was anything there."
+  [url ^java.io.File file]
+  (let [conn (doto (.openConnection (java.net.URL. url))
+               (.setConnectTimeout 30000)
+               (.setReadTimeout 30000))]
+    (try
+      (with-open [in (.getInputStream conn)]
+        (io/make-parents file)
+        (with-open [out (io/output-stream file)] (io/copy in out))
+        true)
+      (catch java.io.FileNotFoundException _ false))))
+
+(defn verify-release!
+  "Downloads `lib` `version`'s jar as a consumer receives it — from `repo-url`, Clojars
+  unless given, into `local-dir`, so nothing already cached answers for it — and holds
+  it to the tag: every file of the jar byte for byte equal to the file at `tag` under
+  src/ or resources/, every such file in the jar, the pom inside naming `version` and
+  `tag`, and `tag` on the remote. Returns `:verified`, or throws naming the first
+  difference under `:check`."
+  [dir {:keys [lib version tag local-dir repo-url] :or {repo-url "https://repo.clojars.org"}}]
+  (when-not (seq (git dir "ls-remote" "--tags" "origin" tag))
+    (refuse-release! (str "the tag " tag " is not on the remote") {:check :tag-not-on-remote :tag tag}))
+  (let [path (str (str/replace (namespace lib) "." "/") "/" (name lib) "/" version "/" (name lib) "-" version ".jar")
+        jar  (io/file local-dir path)]
+    (when-not (fetch! (str repo-url "/" path) jar)
+      (refuse-release! (str lib " " version " is not at " repo-url) {:check :unresolvable}))
+    (let [pom (or (pom-of jar lib) "")]
+      (when-not (and (str/includes? pom (str "<version>" version "</version>"))
+                     (str/includes? pom (str "<tag>" tag "</tag>")))
+        (refuse-release! (str "the jar's pom does not name " version " and " tag) {:check :pom})))
+    (let [expected (shipped-at dir tag)
+          entries  (jar-entries jar)]
+      (when-let [p (first (sort (remove (set (keys entries)) (keys expected))))]
+        (refuse-release! (str (get expected p) " at " tag " is not in the jar") {:check :missing-from-jar :path p}))
+      (when-let [p (first (sort (remove (set (keys expected)) (keys entries))))]
+        (refuse-release! (str p " is in the jar and in neither src nor resources at " tag) {:check :not-in-tag :path p}))
+      (doseq [[p bs] (sort-by key entries)]
+        (when-not (java.util.Arrays/equals ^bytes bs (git-bytes dir tag (get expected p)))
+          (refuse-release! (str p " in the jar differs from " (get expected p) " at " tag) {:check :differs :path p}))))
+    :verified))

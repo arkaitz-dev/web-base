@@ -105,3 +105,11 @@
         (println "  git tag -a" tag "-m" (pr-str message))
         (println "  git push origin" tag)
         (throw e)))))
+
+(defn verify-release
+  "After `deploy`: downloads this version from Clojars into target/verify-release, and
+  holds the jar to the tag — see `release/verify-release!`."
+  [_]
+  (b/delete {:path "target/verify-release"})
+  (println (release/verify-release! nil {:lib lib :version version :tag tag :local-dir "target/verify-release"})
+           lib version))

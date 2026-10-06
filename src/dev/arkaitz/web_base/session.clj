@@ -11,6 +11,7 @@
   (:require [ring.middleware.session :as ring-session]
             [ring.middleware.session.cookie :as cookie])
   (:import [java.security SecureRandom]
+           [java.time Duration]
            [java.util Base64]))
 
 (def ^:private key-length 16)
@@ -88,10 +89,76 @@
            :cookie-attrs (cookie-attrs-of (:cookie-attrs config))}
     (:cookie-name config) (assoc :cookie-name (:cookie-name config))))
 
+(defn- renew-options
+  "`:renew`, refused at construction unless both bounds are positive and the window is
+  shorter than the cap and than the cookie's `:max-age`: one that is not could never
+  renew, the cookie dying before a renewal was due."
+  [{{:keys [every-ms absolute-ms] :as renew} :renew {:keys [max-age]} :cookie-attrs}]
+  (when renew
+    (when-not (pos-int? every-ms)
+      (throw (ex-info "web-base: session :renew :every-ms must be a positive number of milliseconds"
+                      {:config-key [:session :renew :every-ms]})))
+    (when-let [seconds (cond (instance? Duration max-age) (.getSeconds ^Duration max-age)
+                             (integer? max-age)            max-age)]
+      (when (<= (*' 1000 seconds) every-ms)
+        (throw (ex-info "web-base: session :renew :every-ms must be shorter than :cookie-attrs :max-age"
+                        {:config-key [:session :renew :every-ms]}))))
+    (when-not (and (pos-int? absolute-ms) (< every-ms absolute-ms))
+      (throw (ex-info "web-base: session :renew :absolute-ms must be a number of milliseconds past :every-ms"
+                      {:config-key [:session :renew :absolute-ms]})))
+    renew))
+
+(defn- renewing
+  "The session slid forward as it is used: a request whose session was last written
+  `every-ms` ago or more writes it again — the store sets a new expiry, and
+  `:session-cookie-attrs` makes Ring send the cookie again with its `Max-Age` — until
+  `absolute-ms` after it was born, past which it lives out its last lifetime and ends.
+
+  A response that sets `:session` itself is never replaced: a sign-out's nil, a
+  revocation's nil, a sign-in's `:recreate`, a CSRF token. It is only stamped — born
+  anew when it is recreated — and, within the cap, its cookie is sent again too: it is a
+  renewal, and stamping it without one would move the next renewal past the cookie's
+  death. So a session is written at most once per window by this, and a request with no
+  session writes nothing. The stamps live in the session map, so this works over any
+  store, the cookie included — though there every write seals a new value that Ring
+  sends with its `Max-Age`, so a handler's write slides a cookie session past the cap."
+  [handler {:keys [every-ms absolute-ms]}]
+  (fn [request]
+    (let [response (handler request)
+          now      (System/currentTimeMillis)
+          stamp    (fn [session born]
+                     (assoc session ::renewed-at now ::born-at born))
+          within?  (fn [born] (< (- now born) absolute-ms))
+          resend   (fn [response] (update response :session-cookie-attrs #(or % {})))]
+      (cond
+        (nil? response) response
+
+        (contains? response :session)
+        (let [session (:session response)]
+          (if (map? session)
+            (let [born (if (:recreate (meta session))
+                         now
+                         (or (::born-at session) (::born-at (:session request)) now))]
+              (cond-> (assoc response :session (stamp session born))
+                (within? born) resend))
+            response))
+
+        :else
+        (let [session (:session request)
+              renewed (::renewed-at session)
+              born    (::born-at session now)]
+          (if (and (seq session)
+                   (or (nil? renewed) (<= every-ms (- now renewed)))
+                   (within? born))
+            (resend (assoc response :session (stamp session born)))
+            response))))))
+
 (defn wrap
-  "`ring.middleware.session/wrap-session` with the base's options."
+  "`ring.middleware.session/wrap-session` with the base's options, and inside it the
+  renewal `:renew` asks for (`renewing`)."
   [handler config]
-  (ring-session/wrap-session handler (options config)))
+  (let [renew (renew-options config)]
+    (ring-session/wrap-session (cond-> handler renew (renewing renew)) (options config))))
 
 (defn rotate
   "Sets `new-session` on `response` and asks Ring to issue a fresh session id

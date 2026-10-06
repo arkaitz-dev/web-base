@@ -72,7 +72,7 @@
 
 (def ^:private every-owned-key
   "Every key the base reads inside each map it owns, each with a value it accepts."
-  {:session  {:key KEY :cookie-attrs {:secure false} :cookie-name "sid"}
+  {:session  {:key KEY :cookie-attrs {:secure false} :cookie-name "sid" :renew {:every-ms 1 :absolute-ms 2}}
    :security {:frame-options "SAMEORIGIN" :csp "default-src 'self'"
               :hsts {:max-age 1 :include-subdomains? true} :proxy-hops 1}
    :i18n     {:dict {:en {}} :default-locale :en :locale-fn (constantly nil)}
@@ -87,7 +87,8 @@
         base    (merge {:routes []} every-owned-key)]
     (is (= ::built (attempt base)) "control: every key the base reads is accepted, in every map it owns")
     (is (= ::built (attempt (assoc base :whatever-unknown 1))) "the top level stays the host's")
-    (doseq [[path allowed] [[[:session :kye] "[:cookie-attrs :cookie-name :key :store]"]
+    (doseq [[path allowed] [[[:session :kye] "[:cookie-attrs :cookie-name :key :renew :store]"]
+                            [[:session :renew :evry-ms] "[:absolute-ms :every-ms]"]
                             [[:security :hts] "[:csp :frame-options :hsts :proxy-hops]"]
                             [[:security :hsts :max-aeg] "[:include-subdomains? :max-age]"]
                             [[:i18n :default-lcoale] "[:default-locale :dict :locale-fn :locales]"]

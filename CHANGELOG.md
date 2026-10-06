@@ -5,6 +5,16 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.15.0 — unreleased
+
+- `:session :renew {:every-ms :absolute-ms}`: a used session is written again, and its
+  cookie sent again, once per `every-ms`, until `absolute-ms` after it was born. A page
+  within the window writes nothing, a request with no session writes nothing, and a
+  response that sets `:session` itself is never replaced — a write of the same session
+  counts as the renewal and sends the cookie too. `every-ms` must be shorter than
+  `:cookie-attrs :max-age`, and unknown keys under `:renew` are refused naming their
+  path, like everywhere else the base owns.
+
 ## 0.14.0 — 2026-10-02
 
 - The jar carries its native-image metadata, registering its CSS and htmx — the files,

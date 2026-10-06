@@ -438,6 +438,23 @@ when someone has just authenticated**. So the base must **expose "rotate this se
 in its API and document that the consumer is required to call it. Unsaid, it does not get
 done — and it produces no symptom at all.
 
+### Sliding, with a cap (settled 2026-10-06)
+
+A session in a row expires one lifetime after it was last written, and a page in steady
+state writes nothing — so a person working all morning is signed out mid-task. `:renew`
+writes a used session again once per `every-ms`, with `:session-cookie-attrs` so Ring
+sends the cookie again and the browser's Max-Age moves with the row. It stops
+`absolute-ms` after the session was born, because a stolen cookie that is used now and
+then must not live for ever.
+
+It sits inside the session middleware and outside everything else, and it never replaces
+a `:session` a response set: a sign-out's or a revocation's nil must delete, and a
+sign-in's `:recreate` must rotate. Such a session is only stamped — born anew on
+`:recreate`, and otherwise keeping the birth of the session it replaces, so no handler
+that writes a fresh map can reset the cap. The stamps live in the session itself, which
+is what lets the cookie store slide too and keeps the base from asking a store for
+anything Ring's port does not have.
+
 ## 12 · Layouts: nesting is composition, not inheritance
 
 **Different layouts for different pages, and nested layouts: yes — and more easily than

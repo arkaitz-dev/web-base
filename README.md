@@ -215,12 +215,42 @@ cannot be revoked from the server, it only expires. Pass your own `:store` — a
 implementation of Ring's session store protocol — when you need to end a session
 on demand.
 
+**A session that slides as it is used** (since 0.15.0). `:renew {:every-ms n
+:absolute-ms m}` writes a used session again once `every-ms` has passed since it was last
+written, and sends its cookie again, so the store and the browser both count the lifetime
+afresh — until `absolute-ms` after the sign-in, past which it is left to expire:
+
+```clojure
+:session {:store store :cookie-attrs {:max-age 3600}
+          :renew {:every-ms 600000 :absolute-ms 43200000}}   ; every 10 min, at most 12 h
+```
+
+A page in steady state still writes nothing: one write per window, none for a visitor
+with no session. A response that sets `:session` itself — a sign-in's `rotate`, a
+sign-out's nil, a revocation — is never replaced; when it writes the same session — a
+CSRF token — that write is the renewal, and its cookie goes again too. The stamps live in
+the session map under `:dev.arkaitz.web-base.session/renewed-at` and `/born-at`, so it
+works over any store, the cookie included; a session from before `:renew` was on is
+renewed and stamped at its next request. With a `:max-age`, `every-ms` must be shorter
+than it or the base refuses to build, and over a store the longest a session's cookie can
+live is `absolute-ms` plus one `:max-age`. Under the cookie store every write seals a new
+value that Ring sends with its `Max-Age`, so a handler's write past the cap still slides
+it: the cap there bounds renewal, not the handler.
+
+A renewal writes the session as its request read it, onto an existing key. So a change
+another request of the same session commits in between — a CSRF token, a flash — is lost,
+as with any two Ring writes that overlap, at most once per window; a store whose
+`write-session` creates a row that is gone — Ring's `MemoryStore` does — would bring back
+a session ended by a concurrent sign-out (db-base's updates and never inserts on that
+path); and under the cookie store, a renewal answered after a sign-out's can set the old
+cookie again, which that store could never revoke anyway.
+
 ### Configuration keys
 
 | key | meaning |
 |---|---|
 | `:routes` | reitit route data (required) |
-| `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs` and `:cookie-name` (default `ring-session`) optional |
+| `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs`, `:cookie-name` (default `ring-session`) and `:renew {:every-ms :absolute-ms}` optional |
 | `:subject-fn` | request → subject or nil; default: always nil |
 | `:login-path` | where a refusal without a subject goes; required iff a route has `:wb/gate`, and then a route of the router that answers GET and is not gated itself (since 0.13.0) |
 | `:coercion` | a reitit coercion, passed through |

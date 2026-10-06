@@ -150,7 +150,8 @@
   without HSTS and say nothing. `:static` is reitit 0.10's `create-resource-handler`
   options. `:session`'s `:cookie-attrs` is Ring's, which refuses an unknown attribute on
   its own, at the first cookie it writes."
-  {[:session]         #{:key :store :cookie-attrs :cookie-name}
+  {[:session]         #{:key :store :cookie-attrs :cookie-name :renew}
+   [:session :renew]  #{:every-ms :absolute-ms}
    [:security]        #{:frame-options :csp :hsts :proxy-hops}
    [:security :hsts]  #{:max-age :include-subdomains?}
    [:i18n]            #{:dict :default-locale :locale-fn :locales}
@@ -453,7 +454,9 @@
                   `:wb/log-path :template` logs the route's template instead of its path,
                   for a path that carries a secret; `:wb/multipart {:max-file-size n …}`
                   parses a file upload for that route alone
-    :session      `{:key base64-or-bytes}` or `{:store s}` (required)
+    :session      `{:key base64-or-bytes}` or `{:store s}` (required); `:renew
+                  {:every-ms n :absolute-ms m}` slides the session (since 0.15.0, see
+                  `session/wrap`)
     :subject-fn   request → subject or nil (default: always nil)
     :login-path   where a refusal without a subject goes (required iff a route has :wb/gate)
     :coercion     a reitit coercion, passed through (optional)

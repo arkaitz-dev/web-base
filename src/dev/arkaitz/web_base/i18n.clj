@@ -15,6 +15,7 @@
   fragment that arrives a second later carries the same headers and must land
   in the same language."
   (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [taoensso.tempura :as tempura])
   (:import [java.util Locale]))
 
@@ -117,33 +118,61 @@
     (throw (ex-info "web-base: i18n :locale-fn must be a function of the request"
                     {:config-key [:i18n :locale-fn] :value locale-fn}))))
 
-(defn- translator
+(defn- bound
   "`:wb/tr` for one request: `(tr :id)`, `(tr :id args)`, or Tempura's own
   vector of ids with fallbacks, `(tr [:id :other \"literal\"] args)`. A bare id
   is the common call; Tempura only accepts the vector, and its refusal is an
   internal invariant error that names nothing the caller wrote. An id the
-  dictionary lacks answers nil."
+  dictionary lacks answers nil — and is warned of once (`tempura-fn`)."
   [tr prefs]
   (let [ids (fn [id] (if (vector? id) id [id]))]
     (fn
       ([id]      (tr prefs (ids id)))
       ([id args] (tr prefs (ids id) args)))))
 
-(defn wrap
-  "Middleware adding `:wb/tr` and `:wb/locale` to every request. Tempura's
-  locale cache is off: it is a global memo keyed by the preference list, and
-  that list comes from the client."
-  [handler {:keys [dict default-locale] :as config}]
+(defn- tempura-fn
+  "Tempura's translate function over `config`'s dictionary. Its locale cache is off: it
+  is a global memo keyed by the preference list, and that list comes from the client.
+  An id no spoken locale has answers nil, as it always did — auth-base falls back to its
+  English on nil — and is logged at WARN once per id, since a misspelt key otherwise
+  renders as nothing with no word anywhere (booking FRICTION B14). Once per id, not per
+  locale list: the ids come from the source and are few; the lists come from clients."
+  [{:keys [dict default-locale]}]
+  (let [warned (atom #{})]
+    (tempura/new-tr-fn {:dict                dict
+                        :default-locale      default-locale
+                        :cache-dict?         true
+                        :cache-locales?      false
+                        :missing-resource-fn (fn [{:keys [resource-ids]}]
+                                               (let [ids (vec resource-ids)]
+                                                 (when-not (contains? @warned ids)
+                                                   (swap! warned conj ids)
+                                                   (log/warn "web-base: no word in the dictionary for" (pr-str ids))))
+                                               nil)})))
+
+(defn translator
+  "The translate function `:wb/tr` is, outside any request: for mail a job sends, in
+  the language the host keeps for its recipient. `config` is the `:i18n` config as the
+  handler takes it — `(:i18n (wb/expand config))`, so the plugins' words are there — and
+  `prefs` the locales to try, best first; the site's default is tried last, as for a
+  request. Which language a person gets is the host's to know. Build it once per
+  language and keep it: each call reads the dictionary afresh and warns of a missing
+  word again."
+  [config prefs]
   (check-config! config)
-  (let [tr    (tempura/new-tr-fn {:dict           dict
-                                  :default-locale default-locale
-                                  :cache-dict?    true
-                                  :cache-locales? false})
+  (bound (tempura-fn config)
+         (into [] (keep normalise) (concat prefs [(:default-locale config)]))))
+
+(defn wrap
+  "Middleware adding `:wb/tr` and `:wb/locale` to every request."
+  [handler config]
+  (check-config! config)
+  (let [tr    (tempura-fn config)
         ;; The spoken locales, not the dictionary's keys: a language the site speaks
         ;; with few strings of its own still names the page, its strings falling back.
         index (dictionary-index (zipmap (locales-of config) (repeat nil)))]
     (fn [request]
       (let [prefs (preferences config request)]
         (handler (assoc request
-                        :wb/tr     (translator tr prefs)
+                        :wb/tr     (bound tr prefs)
                         :wb/locale (resolve-locale index prefs)))))))

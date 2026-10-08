@@ -8,7 +8,10 @@
             [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.session :as session]
+            [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.testing :as testing]
+            [reitit.core :as r]
+            [reitit.ring :as ring]
             [ring.mock.request :as mock])
   (:import [clojure.lang ExceptionInfo]))
 
@@ -154,15 +157,15 @@
     (is (= denied (refusal (app (mock/request :post "/b/7")))) "anonymous POST to a child with a path param: refused")
     (is (= (back "/deep/c") (refusal (app (mock/request :get "/deep/c")))) "a grandchild two levels down: refused")
     (is (= (back "/own") (refusal (app (mock/request :get "/own")))) "a child with a gate of its own refuses the anonymous too")
-    ;; Replacement rather than composition is only visible through a child gate that
-    ;; admits what the parent's refuses.
-    (is (= {:status 200 :body ":open nil"} (dissoc (app (mock/request :get "/open")) :headers))
-        "a child whose own gate admits everyone replaces the parent's: the anonymous gets in")
+    ;; Composition rather than replacement is only visible through a child gate that
+    ;; admits what the parent's refuses: /open (since 0.16.0).
+    (is (= (back "/open") (refusal (app (mock/request :get "/open"))))
+        "a child whose own gate admits everyone still refuses the anonymous: it composes with the parent's, never replaces it")
     (is (= (back "/nil") (refusal (app (mock/request :get "/nil"))))
         "a child's nil gate does not open it: nil leaves the parent's gate in place")
     (is (= {:status 200 :body ":pub nil"} (dissoc (app (mock/request :get "/pub")) :headers))
         "a sibling outside the group admits the anonymous visitor")
-    (is (= [[:open {}] [:pub {}]] @ran) "no gated child's handler ran for an anonymous request")
+    (is (= [[:pub {}]] @ran) "no gated child's handler ran for an anonymous request — /open included")
     (is (= {:status 200 :body ":a \"ann\""} (dissoc (app (in (mock/request :get "/a"))) :headers))
         "signed in, the child's handler ran with the subject")
     (let [r (app (in (mock/header (mock/request :get "/a") "HX-Request" "true")))]
@@ -170,10 +173,156 @@
           "signed in, an htmx swap of the child passes: no HX-Redirect"))
     (is (= {:status 200 :body ":b \"ann\""} (dissoc (app (in (mock/request :post "/b/7"))) :headers)) "signed-in POST reaches the child")
     (is (= {:status 200 :body ":c \"ann\""} (dissoc (app (in (mock/request :get "/deep/c"))) :headers)) "and the grandchild")
+    (is (= {:status 200 :body ":open \"ann\""} (dissoc (app (in (mock/request :get "/open"))) :headers))
+        "signed in, both gates admit: /open's handler ran with the subject")
     (let [r (app (in (mock/request :get "/own")))]
-      (is (= [403 (page 403 (frag 403))] [(:status r) (:body r)]) "the child's own gate replaced the parent's"))
-    (is (= [[:open {}] [:pub {}] [:a {}] [:a {}] [:b {:id "7"}] [:c {}]] @ran)
-        "the children ran only for the subject, the param reaching the handler through the inherited gate")))
+      (is (= [403 (page 403 (frag 403))] [(:status r) (:body r)])
+          "signed in and still refused by the child's own gate: a 403, since there is a subject — the child narrows the parent"))
+    (is (= [[:pub {}] [:a {}] [:a {}] [:b {:id "7"}] [:c {}] [:open {}]] @ran)
+        "the children ran only for the subject, /open once and only signed in")))
+
+;; --- gates compose (since 0.16.0) -------------------------------------------
+
+(defn- gated-app
+  "A handler over `tree` beside a login page and two logins, ann's and bob's; CSRF off so
+  a POST reaches the gate. Answers `[app ran in-as]`: the handlers' ledger, and
+  `(in-as user request)` carrying that user's session."
+  [tree]
+  (let [ran (atom [])
+        app (wb/handler (config :csrf false
+                                :routes (into [[LOGIN {:get (fn [_] {:status 200 :body "login page"})}]
+                                               ["/as/:user" {:post (fn [r] (session/rotate {:status 200 :body "in"}
+                                                                                           {:user (get-in r [:path-params :user])}))}]]
+                                              (tree (fn [tag] (fn [r] (swap! ran conj tag)
+                                                                {:status 200 :body (str tag " " (pr-str (:wb/subject r)))}))))))
+        sessions (memoize (fn [user] (app (mock/request :post (str "/as/" user)))))]
+    [app ran (fn [user request] (testing/with-cookies request (sessions user)))]))
+
+(defn- back [path] [303 (str LOGIN "?next=" (java.net.URLEncoder/encode ^String path "UTF-8"))])
+(defn- outcome [response] [(:status response) (get-in response [:headers "Location"])])
+(def ^:private forbidden [403 nil])
+
+(deftest a-child-gate-narrows-its-parent--refused-by-the-child-is-a-403--admitted-by-both-a-200
+  (let [[app ran in-as] (gated-app (fn [h] [["" {:wb/gate wb/subject-present?}
+                                             ["/admins" {:wb/gate (fn [r] (= "root" (:wb/subject r))) :get (h :admins)}]
+                                             ["/anyone" {:wb/gate (constantly true) :get (h :anyone)}]]]))]
+    (is (= (back "/admins") (outcome (app (mock/request :get "/admins")))) "anonymous: the parent refuses first")
+    (is (= (back "/anyone") (outcome (app (mock/request :get "/anyone")))) "anonymous, under a child that admits all: still the parent's refusal")
+    (is (= forbidden (outcome (app (in-as "ann" (mock/request :get "/admins"))))) "signed in, the child refuses: a 403, there being a subject")
+    (is (= {:status 200 :body ":anyone \"ann\""} (dissoc (app (in-as "ann" (mock/request :get "/anyone"))) :headers))
+        "signed in and admitted by both")
+    (is (= {:status 200 :body ":admins \"root\""} (dissoc (app (in-as "root" (mock/request :get "/admins"))) :headers))
+        "the one the child admits gets in")
+    (is (= [:anyone :admins] @ran) "only admitted handlers ran")))
+
+(deftest a-method-level-gate-composes-with-the-routes-and-the-parents
+  (let [[app ran in-as] (gated-app (fn [h] [["" {:wb/gate wb/subject-present?}
+                                             ["/doc" {:wb/gate (fn [r] (not= "bob" (:wb/subject r)))
+                                                      :get  {:wb/gate (constantly true) :handler (h :read)}
+                                                      :post {:wb/gate (fn [_] false) :handler (h :write)}}]]]))]
+    (is (= (back "/doc") (outcome (app (mock/request :get "/doc"))))
+        "anonymous GET under a method gate that admits all: the parent's refusal")
+    (is (= forbidden (outcome (app (in-as "bob" (mock/request :get "/doc"))))) "bob is refused by the route's gate, under the method's")
+    (is (= {:status 200 :body ":read \"ann\""} (dissoc (app (in-as "ann" (mock/request :get "/doc"))) :headers)) "ann reads")
+    (is (= forbidden (outcome (app (in-as "ann" (mock/request :post "/doc"))))) "and the POST's own gate narrows what the GET's does not")
+    (is (= [:read] @ran) "only the admitted read ran"))
+  (let [top   (fn [_] true) route (fn [_] true) by-get (fn [_] true)
+        router (testing/router [["" {:wb/gate top} ["/doc" {:wb/gate route :get {:wb/gate by-get :handler identity}}]]])
+        match  (r/match-by-path router "/doc")]
+    (is (= [true true true] (mapv identical? [top route by-get] (:wb/gates (meta (get-in match [:result :get :data :wb/gate])))))
+        "the GET endpoint's gate is parent, route and method, in that order")
+    (is (= [true true] (mapv identical? [top route] (:wb/gates (meta (get-in match [:data :wb/gate])))))
+        "the route's own data, parent and route: a method's gate does not rise to the route")))
+
+(deftest a-chain-asks-the-parent-first--a-refusal-stops-it
+  (let [asked (atom [])
+        spy   (fn [tag pred] (fn [r] (swap! asked conj tag) (pred r)))
+        top   (spy :top wb/subject-present?)
+        mid   (spy :mid (fn [r] (not= "bob" (:wb/subject r))))
+        leaf  (spy :leaf (constantly true))
+        [app _ in-as] (gated-app (fn [h] [["" {:wb/gate top}
+                                           ["/m" {:wb/gate mid} ["/leaf" {:wb/gate leaf :get (h :leaf)}]]
+                                           ;; Relies on its parent: under a child asked first it would throw.
+                                           ["/strict" {:wb/gate (fn [r] (.startsWith ^String (:wb/subject r) "a")) :get (h :strict)}]]]))
+        ask   (fn [request] (reset! asked []) [(outcome (app request)) @asked])]
+    (is (= [(back "/m/leaf") [:top]] (ask (mock/request :get "/m/leaf"))) "anonymous: the parent alone is asked")
+    (is (= [forbidden [:top :mid]] (ask (in-as "bob" (mock/request :get "/m/leaf")))) "bob: refused in the middle, the leaf never asked")
+    (is (= [[200 nil] [:top :mid :leaf]] (ask (in-as "ann" (mock/request :get "/m/leaf")))) "ann: every gate, root to leaf")
+    (is (= (back "/strict") (outcome (app (mock/request :get "/strict"))))
+        "a child may rely on its parent's precondition: the anonymous never reaches it"))
+  (let [top (fn [_] true) mid (fn [_] true) leaf (fn [_] true)
+        router (testing/router [["" {:wb/gate top} ["/m" {:wb/gate mid} ["/leaf" {:wb/gate leaf :get identity}]]]])
+        composed (get-in (r/match-by-path router "/m/leaf") [:data :wb/gate])]
+    (is (= [true true true] (mapv identical? [top mid leaf] (:wb/gates (meta composed))))
+        "the composed gate lists its parts flattened, root first")
+    (is (not-any? #(identical? composed %) [top mid leaf]) "and is none of them")))
+
+(deftest a-gate-that-is-not-callable-is-refused-at-construction--under-a-gate-or-over-one
+  (let [attempt (fn [tree] (try (wb/handler (config :routes (into [[LOGIN {:get (fn [_] {:status 200 :body ""})}]] tree)))
+                                ::built
+                                ;; reitit adds its own cause to the data; the base's keys are these.
+                                (catch ExceptionInfo e [(ex-message e) (select-keys (ex-data e) [:config-key :value])])))
+        refused (fn [bad] ["web-base: a route declares :wb/gate that is not callable" {:config-key [:wb/gate] :value bad}])]
+    (doseq [bad [false "yes" 42]]
+      (is (= (refused bad) (attempt [["" {:wb/gate wb/subject-present?} ["/x" {:wb/gate bad :get identity}]]]))
+          (str (pr-str bad) " under a callable parent: refused, never composed into a function"))
+      (is (= (refused bad) (attempt [["" {:wb/gate bad} ["/x" {:wb/gate wb/subject-present? :get identity}]]]))
+          (str (pr-str bad) " over a callable child: refused, never quietly replaced by the child's")))
+    (is (= ::built (attempt [["" {:wb/gate wb/subject-present?} ["/x" {:wb/gate (constantly true) :get identity}]]]))
+        "control: two callable gates build")))
+
+;; Found by the Phase-3 panel on 0.16.0: reitit merges a parent's method data into its
+;; children's endpoints, where a child's method data or plain handler replaces it.
+(deftest a-gate-under-a-method-of-a-route-with-children-is-refused--it-could-be-widened
+  (let [admin?  (fn [r] (= "root" (:wb/subject r)))
+        ok      (fn [_] {:status 200 :body "ok"})
+        attempt (fn [tree] (try (wb/handler (config :routes (into [[LOGIN {:get (fn [_] {:status 200 :body ""})}]] tree)))
+                                ::built
+                                (catch ExceptionInfo e [(ex-message e) (select-keys (ex-data e) [:config-key :path])])))
+        refused (fn [path] [(str "web-base: route " path " declares :wb/gate under a method and has routes under it,"
+                                 " which could widen it — put the gate on the route's own data")
+                            {:config-key [:routes] :path path}])]
+    (doseq [[shape tree] {"a child's method gate"        [["/a" {:get {:wb/gate admin?}} ["/x" {:get {:handler ok :wb/gate wb/subject-present?}}]]]
+                          "a child's route gate"         [["/a" {:get {:wb/gate admin?}} ["/x" {:wb/gate wb/subject-present? :get ok}]]]
+                          "a child declaring nothing"    [["/a" {:get {:wb/gate admin?}} ["/x" {:get ok}]]]
+                          "a child with a map handler"   [["/a" {:get {:wb/gate admin?}} ["/x" {:get {:handler ok}}]]]
+                          "deeper, under a group"        [["" {:wb/gate wb/subject-present?} ["/a" {:post {:wb/gate admin?}} ["/x" {:get ok}]]]]
+                          "children as a list"           [["/a" {:get {:wb/gate admin? :handler ok}} (list ["/x" {:get ok}])]]
+                          "children made by for"         [["/a" {:get {:wb/gate admin?}} (for [p ["/x"]] [p {:get ok}])]]}]
+      (is (= (refused "/a") (attempt tree)) (str shape ": refused, naming the route")))
+    (is (= ::built (attempt [["/a" {:get {:wb/gate admin? :handler ok}}]])) "control: a method gate on a leaf builds")
+    (is (= ::built (attempt [["/a" {:wb/gate admin?} ["/x" {:get ok}]]])) "control: the same gate on the route's own data builds")))
+
+(deftest a-gate-whose-middleware-was-replaced-away-is-refused
+  (let [ok      (fn [_] {:status 200 :body "ok"})
+        attempt (fn [tree] (try (wb/handler (config :routes (into [[LOGIN {:get (fn [_] {:status 200 :body ""})}]] tree)))
+                                ::built
+                                (catch ExceptionInfo e [(ex-message e) (select-keys (ex-data e) [:config-key :path])])))]
+    (is (= ["web-base: route /x declares :wb/gate but its middleware no longer has the gate — a :middleware ^:replace drops the base's own"
+            {:config-key [:routes] :path "/x"}]
+           (attempt [["" {:wb/gate wb/subject-present?} ["/x" {:middleware ^:replace [] :get ok}]]]))
+        "a ^:replace under a gated group: refused, never served ungated")
+    (is (= ::built (attempt [["" {:wb/gate wb/subject-present?} ["/x" {:middleware [(fn [h] h)] :get ok}]]]))
+        "control: middleware of the route's own, added, builds")))
+
+(deftest testing-router-compiles-as-the-handler-does
+  (let [p (fn [_] true) c (fn [_] true)
+        gate-of (fn [router] (get-in (r/match-by-path router "/x") [:data :wb/gate]))
+        tree [["" {:wb/gate p} ["/x" {:wb/gate c :get identity}]]]]
+    (is (= [true true] (mapv identical? [p c] (:wb/gates (meta (gate-of (testing/router tree))))))
+        "testing/router composes as the base does")
+    (is (identical? c (gate-of (ring/router tree))) "control: reitit's own router replaces — a test reading it reads a semantics the handler no longer has")))
+
+(deftest a-nil-is-no-gate--and-a-lone-gate-is-the-hosts-own-function
+  (let [p (fn [_] true) c (fn [_] true)
+        router (testing/router [["" {:wb/gate p} ["/nil" {:wb/gate nil :get identity}]]
+                             ["/lone" {:wb/gate c :get identity}]
+                             ["" {} ["/under-ungated" {:wb/gate c :get identity}]]])
+        gate-at #(get-in (r/match-by-path router %) [:data :wb/gate])]
+    (is (identical? p (gate-at "/nil")) "a child's nil keeps the parent's own predicate, not a composition with a stand-in")
+    (is (and (identical? c (gate-at "/lone")) (identical? c (gate-at "/under-ungated")))
+        "with no gate above, the host's predicate is what reitit holds")
+    (is (nil? (:wb/gates (meta (gate-at "/lone")))) "unwrapped")))
 
 (deftest assembled-csrf-refuses-unsafe-without-token-and-admits-header-or-form-field
   (let [app    (wb/handler (config))

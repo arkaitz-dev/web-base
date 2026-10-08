@@ -7,7 +7,8 @@
   (:require [clojure.string :as str]
             [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.htmx :as htmx]
-            [dev.arkaitz.web-base.security :as security])
+            [dev.arkaitz.web-base.security :as security]
+            [reitit.ring :as ring])
   (:import [java.util Locale]))
 
 (defn- lower
@@ -15,9 +16,10 @@
   [s]
   (.toLowerCase (str s) Locale/ROOT))
 
-(defn- header-values
+(defn header-values
   "The values of header `name` in `headers`, whatever the case of the key and
-  whether Ring holds one string or several."
+  whether Ring holds one string or several — always a vector, empty when absent. Public
+  for a host's assertions on a response's headers."
   [headers name]
   (let [wanted (lower name)
         values (some (fn [[k v]] (when (= wanted (lower k)) v)) headers)]
@@ -215,7 +217,9 @@
                 (assoc-in [:headers "content-type"] type)
                 (assoc-in [:headers "content-length"] (str (alength ^bytes bytes)))))))
 
-(defn- location [response]
+(defn location
+  "The response's `Location`, whatever the case of the header's key, or nil."
+  [response]
   (first (header-values (:headers response) "Location")))
 
 (def ^:private redirect? #{301 302 303})
@@ -305,3 +309,10 @@
               (and (= 200 (:status response))
                    (= login-path (get headers "HX-Redirect"))
                    (nil? (get headers "Location"))))))))
+
+(defn router
+  "`routes` compiled as the base compiles them — a child's gate composed with its
+  parent's — for a test that reads which gates guard which endpoint. A composed gate is
+  identical to none of its parts; its metadata lists them under `:wb/gates`."
+  [routes]
+  (ring/router routes {:meta-merge gate/merge-route-data}))

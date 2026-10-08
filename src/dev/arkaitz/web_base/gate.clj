@@ -10,7 +10,8 @@
   needs `WWW-Authenticate`, and only whoever authenticates knows the scheme."
   (:require [clojure.string :as str]
             [dev.arkaitz.web-base.htmx :as htmx]
-            [dev.arkaitz.web-base.security :as security]))
+            [dev.arkaitz.web-base.security :as security]
+            [meta-merge.core :as mm]))
 
 (defn subject-present?
   "The stock predicate: there is a subject. Presence is all the base ever
@@ -84,10 +85,22 @@
     (render-error {:status 403} request)
     (redirect-for request (with-next login-path request))))
 
+(defn- parts [gate] (or (:wb/gates (meta gate)) [gate]))
+
+(defn compose
+  "A gate admitting what both `parent` and `child` admit, the parent asked first. It
+  carries every predicate it is made of under `:wb/gates` in its metadata, flattened,
+  so a test can name the gates a route is guarded by: a composed gate is identical to
+  none of them."
+  [parent child]
+  (with-meta (fn [request] (and (parent request) (child request)))
+    {:wb/gates (into (parts parent) (parts child))}))
+
 (defn middleware
   "reitit middleware compiled per route, over the route's data as reitit merged it
   from its parents — so a gate on a parent guards every child, a child's own gate
-  replaces it, and a child's nil leaves the parent's in place. It vanishes from routes
+  composes with it — both must admit, so a child can narrow a parent's gate and never
+  widen it — and a child's nil leaves the parent's in place. It vanishes from routes
   whose merged data has no `:wb/gate` (absent or nil), and fails at router construction when the gate
   is present but not callable — `false` would otherwise open a route without
   a symptom — or when no `:login-path` is configured, which would otherwise
@@ -108,3 +121,22 @@
                     (if (gate request)
                       (handler request)
                       (refuse request opts))))))})
+
+(defn merge-route-data
+  "reitit's merge of route data, parent first, except that two gates compose: a child's
+  `:wb/gate` narrows its parent's and never replaces it, so one line under a members-only
+  group cannot open it to anyone signed in (decided 2026-10-08, booking FRICTION B17). A
+  gate that is not callable stays where it is, so the compile step refuses it — a
+  parent's `false` is not quietly replaced by a child's function — and a child's nil
+  leaves the parent's in place. Public for a test that compiles routes as the base does:
+  `testing/router`."
+  [left right]
+  (let [parent (get left :wb/gate)
+        child  (get right :wb/gate)]
+    (cond
+      (and (ifn? parent) (ifn? child))
+      (assoc (mm/meta-merge (dissoc left :wb/gate) (dissoc right :wb/gate)) :wb/gate (compose parent child))
+      (and (some? parent) (not (ifn? parent)) (some? child))
+      (assoc (mm/meta-merge left right) :wb/gate parent)
+      :else
+      (mm/meta-merge left right))))

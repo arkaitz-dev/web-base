@@ -521,3 +521,11 @@
     (testing/visit b :post "/x" nil {:files files})
     (is (str/starts-with? (get-in (peek @hits) [:headers "content-type"]) "multipart/form-data; boundary=")
         "control: a POST carries them")))
+
+(deftest header-values-and-location-read-a-response-whatever-the-case-of-its-keys
+  ;; Public since 0.16.0, for a host's own assertions on a response.
+  (is (= ["a" "b"] (testing/header-values {"set-cookie" ["a" "b"]} "Set-Cookie")) "several values, any case")
+  (is (= ["x"] (testing/header-values {"X-Thing" "x"} "x-thing")) "one value is a vector of one")
+  (is (= [] (testing/header-values {} "Location")) "absent is empty, never nil")
+  (is (= "/there" (testing/location {:status 303 :headers {"location" "/there"}})) "the Location, whatever its case")
+  (is (nil? (testing/location {:status 200 :headers {}})) "or nil"))

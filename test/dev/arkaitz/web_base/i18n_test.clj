@@ -3,6 +3,8 @@
   resolved locale and Tempura's answer are pinned together so they cannot
   disagree unnoticed."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.tools.logging.test :as log-test]
+            [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.i18n :as i18n]
             [ring.mock.request :as mock])
   (:import [clojure.lang ExceptionInfo]))
@@ -26,6 +28,7 @@
 (defn- app-with [config] (i18n/wrap seen (merge {:dict D :locales L} config)))
 (def ^:private app-es (app-with {:default-locale :es}))
 (def ^:private app-en (app-with {:default-locale :en}))
+(def ^:private app-es-tr (i18n/wrap identity {:dict D :locales L :default-locale :es}))
 
 (defn- get* [& headers]
   (reduce (fn [request [k v]] (mock/header request k v)) (mock/request :get "/") (partition 2 headers)))
@@ -212,3 +215,32 @@
     (is (= [:fr "Hello Ann" "en-only"] (accept app "fr"))
         "a French request is French — `<html lang>` says so — while its strings, none of them French yet, fall back")
     (is (= [:en "Hello Ann" "en-only"] (accept app "de")) "control: a language the site does not list is the default")))
+
+(deftest a-word-the-dictionary-lacks-answers-nil-and-is-warned-of-once-per-id
+  ;; nil is kept: a plugin falls back to its own words on nil (auth-base's English).
+  ;; The warning is what makes a misspelt key visible (booking FRICTION B14); once per
+  ;; id, so a page drawn a thousand times logs it once.
+  (let [ask  (fn [] ((:wb/tr (app-es-tr (mock/request :get "/"))) [:no-such-word]))]
+    (log-test/with-log
+      (is (= [nil nil] [(ask) (ask)]) "nil, as before, every time")
+      (is (= [:warn] (mapv :level (filter #(re-find #"no word" (str (:message %))) (log-test/the-log))))
+          (str "one warning for the two asks: " (pr-str (mapv :message (log-test/the-log)))))
+      (is (re-find #":no-such-word" (str (:message (first (log-test/the-log))))) "naming the id"))
+    (log-test/with-log
+      (is (= "Hola Ann" ((:wb/tr (app-es-tr (mock/request :get "/"))) [:greet] ["Ann"])) "control: a word it has")
+      (is (empty? (log-test/the-log)) "is no warning"))))
+
+(deftest a-translator-outside-a-request-speaks-the-locales-asked-then-the-default
+  (let [config {:dict D :locales L :default-locale :en}]
+    (is (= "Hola Ann" ((i18n/translator config [:es]) [:greet] ["Ann"])) "the locale asked for")
+    (is (= "Hello Ann" ((i18n/translator config [:fr]) [:greet] ["Ann"])) "one the site does not speak falls to the default")
+    (is (= "en-only" ((i18n/translator config [:es]) [:only-en])) "a word the locale lacks falls back as on a page")
+    (is (= "Hola Ann" ((i18n/translator config ["ES"]) :greet ["Ann"])) "spelt as a request would spell it")
+    (is (= [:i18n :dict] (:config-key (ex-data (try (i18n/translator {:default-locale :en} [:en]) (catch ExceptionInfo e e)))))
+        "and its configuration is checked as the middleware's is"))
+  (let [plugin {:wb.plugin/name :p :i18n {:dict {:en {:p/word "from the plugin"} :es {:p/word "del plugin"}}}}
+        cfg    {:routes [["/" {:get (fn [_] {:status 200 :body ""})}]] :session {:key "AAECAwQFBgcICQoLDA0ODw=="}
+                :i18n {:dict {:en {:greet "Hello"} :es {:greet "Hola"}} :default-locale :en :locales [:en :es]}
+                :plugins [plugin]}]
+    (is (= "del plugin" ((wb/translator (:i18n (wb/expand cfg)) [:es]) :p/word))
+        "fed from the expanded configuration, a plugin's words are there")))

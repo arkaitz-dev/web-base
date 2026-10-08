@@ -5,6 +5,33 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.16.0 — 2026-10-08
+
+From what building `booking`, a third application, cost (its `FRICTION.md`).
+
+- **Breaking:** a child route's `:wb/gate` composes with its parent's — both must admit,
+  the parent asked first — where it replaced it: one line under a members-only group
+  opened it to anybody signed in. A child that meant to widen a gated group no longer
+  can; move such a page out of the group. A composed gate is a new function, listing its
+  parts under `:wb/gates` in its metadata, so a test comparing gates by identity now
+  names them: `testing/router` compiles routes as the base does, for such a test.
+- **Breaking:** a `:wb/gate` under a method of a route that has routes under it is
+  refused at construction — a child's method data or plain handler replaced it there —
+  and so is a gated route whose `:middleware ^:replace […]` dropped the gate. A gate
+  that is not callable is refused whether it is a parent's or a child's.
+- A word the dictionary lacks still answers nil, and is now logged at WARN once per id.
+- `wb/translator`: the words of the site outside a request, for the mail a job sends.
+- `testing/header-values` and `testing/location` are public.
+- The README says where a credential of a sessionless endpoint goes (the query string or
+  a header, never the path, which the access line prints), how a notice survives a
+  redirect without a session, how to link to a named route, and that a sessionless
+  handler gets the raw request.
+- `meta-merge/meta-merge` is declared: the base now requires it by name.
+
+**In your app:** a `routes_test` that compiles routes with `ring/router` to read their
+gates uses `testing/router` instead, and reads a composed gate's parts from
+`(:wb/gates (meta gate))`.
+
 ## 0.15.0 — 2026-10-06
 
 - `:session :renew {:every-ms :absolute-ms}`: a used session is written again, and its

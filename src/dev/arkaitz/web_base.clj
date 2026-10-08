@@ -387,6 +387,46 @@
                  (str/replace "\\" "/"))]
     (boolean (re-find #"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)" read))))
 
+(defn- route-vector? [x] (and (vector? x) (string? (first x))))
+
+(defn- check-method-gates!
+  "A `:wb/gate` under a method of a route that has children is refused (since 0.16.0):
+  reitit merges a parent's method data into its children's endpoints, where a child's
+  handler or method gate replaces it — a child declaring nothing, `:get handler`, wipes
+  the parent's `:get` map whole — so a gate there could be widened by any route under it.
+  On a route with children the gate goes on the route's own data, where it composes."
+  [routes]
+  (letfn [(walk [x]
+            (cond
+              (route-vector? x)
+              (let [[path & more] x
+                    data     (when (map? (first more)) (first more))
+                    ;; Any sequence: reitit mounts children written as a list or made by
+                    ;; `for`, and a check that saw vectors alone would miss them.
+                    children (filter sequential? (if data (rest more) more))]
+                (when (and (seq children)
+                           (some #(some? (get-in data [% :wb/gate])) ring/http-methods))
+                  (throw (ex-info (str "web-base: route " path " declares :wb/gate under a method and has routes"
+                                       " under it, which could widen it — put the gate on the route's own data")
+                                  {:config-key [:routes] :path path})))
+                (run! walk children))
+              (sequential? x) (run! walk x)))]
+    (walk routes)))
+
+(defn- check-gates-wired!
+  "Every endpoint whose data carries a `:wb/gate` has the gate's middleware: a route's
+  `:middleware ^:replace […]` replaces the base's four, the gate's among them, and the
+  gate would be declared and never asked (since 0.16.0)."
+  [router]
+  (doseq [[path data result] (r/compiled-routes router)
+          method ring/http-methods
+          :let [endpoint (get result method)]
+          :when (and endpoint (some? (get-in endpoint [:data :wb/gate])))]
+    (when-not (some #(= ::gate/gate (:name %)) (get-in endpoint [:data :middleware]))
+      (throw (ex-info (str "web-base: route " path " declares :wb/gate but its middleware no longer has the"
+                           " gate — a :middleware ^:replace drops the base's own")
+                      {:config-key [:routes] :path path})))))
+
 (defn- check-login-path!
   "With a gate anywhere, the `:login-path` it sends people to must be a page: a route of
   this router that answers GET and is not gated itself. Otherwise every refusal is a
@@ -450,7 +490,7 @@
   "Builds the Ring handler from the host's config:
 
     :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
-                  inherited by nested routes (layouts concatenate, a child's gate replaces);
+                  inherited by nested routes (layouts concatenate, a child's gate composes with its parent's);
                   `:wb/log-path :template` logs the route's template instead of its path,
                   for a path that carries a secret; `:wb/multipart {:max-file-size n …}`
                   parses a file upload for that route alone
@@ -512,14 +552,19 @@
         ;; and a layout that throws there has nothing left to catch it (and must not be
         ;; asked to render its own failure). The base's own page asks for nothing.
         bare-error   (error/renderer {})
+        ;; Before the router: reitit refuses some of these trees for its own reasons,
+        ;; which would hide this one's.
+        _            (check-method-gates! routes)
         router       (ring/router routes
-                                  {:data (cond-> {:middleware [(error/middleware render-error)
+                                  {:meta-merge gate/merge-route-data
+                                   :data (cond-> {:middleware [(error/middleware render-error)
                                                                (gate/middleware {:login-path   login-path
                                                                                  :render-error render-error})
                                                                render/middleware
                                                                coercion/coerce-request-middleware]}
                                            coercion (assoc :coercion coercion))})]
     (refuse-shadowing! router sessionless)
+    (check-gates-wired! router)
     (check-login-path! router login-path)
     (check-assets! assets stylesheets router sessionless)
     (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
@@ -545,6 +590,11 @@
         (security/wrap-headers security)
         (log/wrap-request-id (logged-path router))
         (cond-> (seq stylesheets) (wrap-stylesheets stylesheets)))))))
+
+(def translator
+  "`(translator i18n-config prefs)` → the translate function `:wb/tr` is, for words
+  outside a request — a job's mail. `i18n-config` is `(:i18n (expand config))`."
+  i18n/translator)
 
 (def expand
   "`(expand config)` → the plain config its `:plugins` stand for, merged by the rules of

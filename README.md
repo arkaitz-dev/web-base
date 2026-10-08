@@ -142,9 +142,16 @@ holds it typed.
 
 Gate the group, not each route: a private route added under the gated parent is
 private without anyone remembering to say so. Public routes, a login included, go
-outside it. A child's own `:wb/gate` replaces the parent's, and a child's `nil` does
-not open it — reitit's merge keeps the parent's — so a page that must be public moves
-out of the group.
+outside it. A child's own `:wb/gate` composes with the parent's — both must admit, the
+parent asked first (since 0.16.0; before, it replaced it, and one line under a
+members-only group opened it to anybody signed in) — and a child's `nil` keeps the
+parent's. A child can narrow a group and never widen it, so a page that must be public
+moves out of the group. A composed gate is a new function, identical to none of its
+parts; it lists them, flattened, under `:wb/gates` in its metadata, for a test that names
+the gates a route is guarded by — `testing/router` compiles routes as the handler does,
+where reitit's own `ring/router` would still show the child's gate alone. A gate under a
+method of a route with routes under it is refused, as is a gated route whose
+`:middleware ^:replace […]` drops the base's: reitit lets a child replace either.
 
 A refused navigation — a GET or HEAD, not a swap — is sent to `login-path?next=<the
 page, with its query>` (since 0.10.0), so a sign-in can return there; a refused POST or
@@ -163,8 +170,8 @@ after the gate, sending the visitor away the way the gate does:
     (if (current-org request) (handler request) (wb/redirect-for request "/orgs"))))
 ```
 
-A second `:wb/gate` would not do: a child's gate replaces its parent's, and the page
-would no longer check that anybody is signed in.
+A second `:wb/gate` would not do: a gate's refusal goes to the login page or is a 403,
+never to a page of the host's choosing.
 
 ### Sessions
 
@@ -430,7 +437,24 @@ work without JavaScript, answers through the two helpers instead of branching by
 (`response/unprocessable`) and a navigation with `rerender` of the page's GET; `form-done`
 answers a swap with its fragment, 200, and a navigation with a 303 to the location. All of
 this relies on htmx 4 swapping a 422; under htmx 2 a host would have to allow it in
-`htmx.config.responseHandling`.
+`htmx.config.responseHandling`. The fragment is built on every call and thrown away on a
+navigation; a host whose fragment costs queries branches on `htmx/partial-request?`.
+
+**A notice after a redirect** — "saved", "the invitation is on its way" — needs no
+session: the 303 names it in the query, and the page draws only names it knows, so a
+link nobody sent cannot put words on the page:
+
+```clojure
+(response/see-other "/teams/7?outcome=invited")
+;; in the view
+(def outcomes {"invited" :app/outcome-invited "failed" :app/outcome-failed})
+(when-let [k (outcomes (get-in request [:query-params "outcome"]))]
+  [:p {:role "status"} ((:wb/tr request) k)])
+```
+
+**A link to a route** is a string the host builds, or reitit's own reverse routing: give
+the route a `:name` and ask `(reitit.core/match-by-name (reitit.ring/get-router request)
+::team {:team-id id})`. Nothing checks at boot that every link resolves.
 
 **A file upload** is declared on its route (since 0.10.0), and only there is a
 `multipart/form-data` body parsed — to temporary files, and before CSRF has judged the
@@ -460,8 +484,14 @@ when the refusal is sent.
 `:wb/tr` takes a resource id, `(tr :nav/home)`, an id with arguments,
 `(tr :greet ["Ann"])`, or Tempura's vector of ids with fallbacks,
 `(tr [:nav/home :nav/default])`. An id the dictionary lacks answers `nil` —
-no exception, no placeholder — so a missing translation shows as an empty
-element.
+no exception, no placeholder, so a plugin's own fallback still works — and is logged at
+WARN once per id (since 0.16.0): a misspelt key no longer renders as an empty element in
+silence.
+
+**Words outside a request** — the mail a job sends — come from
+`(wb/translator (:i18n (wb/expand config)) [:es])`: the same dictionary, the plugins'
+words included, tried in the locales given and then the site's default. Which language a
+person reads is the host's to keep; the base remembers nobody's.
 
 ### Testing a host
 
@@ -707,7 +737,9 @@ headers, body limit and error page. Its value can be a whole reitit application:
               "/api/"   (ring/ring-handler (ring/router api-routes) (constantly {:status 404 :body ""}))}
 ```
 
-A prefix that covers one of `:routes` is refused. For a 401, auth-base's
+A prefix that covers one of `:routes` is refused. A sessionless handler receives the
+request as it came: no params middleware runs before it, so it reads `:query-string`
+itself (`ring.util.codec/form-decode`). For a 401, auth-base's
 `(auth/unauthorized ceremony "Bearer realm=\"api\"")` names the scheme.
 `response/health` answers 200 `ok` while `ready?` is truthy and 503 otherwise, an
 exception logged (an `Error` is the base's 500); it says nothing else, since a probe is
@@ -789,7 +821,9 @@ merges a `nil` as no value — so a group marked for a secret stays hidden whole
 It hides the path only where the route matches. A request that misses it — a trailing
 slash, a segment a mail client or link scanner appended — is a 404 logged as it came, and
 a `:sessionless` path is one no route may match, so a secret there cannot be hidden this
-way. Nor can the base keep a secret out of an exception the host throws: a logged
+way: a sessionless endpoint whose credential travels with the request — a calendar feed,
+a webhook — takes it in the query string, which the line never shows, or in a header,
+and never in a path segment. Nor can the base keep a secret out of an exception the host throws: a logged
 `ex-info` prints its data, so an `ex-info` carrying the request or its `:path-params`
 logs the token with it.
 

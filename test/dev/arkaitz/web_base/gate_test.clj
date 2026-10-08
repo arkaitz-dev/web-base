@@ -207,3 +207,14 @@
     (is (= dropped (refused :get (apply str (repeat 680 "&")))) "and 2050 encoded: dropped, the bound is on what is sent")
     (is (= [303 REFUSAL (str login "?next=%2Fpriv")] (refused :head nil)) "a HEAD carries next like a GET")
     (is (= dropped (refused :head (a 2039))) "and is bounded like one")))
+
+(deftest compose-lists-its-parts-in-order-and-flattened--and-is-none-of-them
+  (let [a (fn [_] true) b (fn [_] true) c (fn [_] false)
+        ab (gate/compose a b) abc (gate/compose ab c)]
+    (is (= [true true true] (mapv identical? [a b c] (:wb/gates (meta abc)))) "flattened, parent first")
+    (is (= [true true true] (mapv identical? [c a b] (:wb/gates (meta (gate/compose c ab))))) "in the order composed")
+    (is (not-any? #(identical? abc %) [a b c]) "a new function")
+    (is (= [true false] [(boolean (ab {})) (boolean (abc {}))]) "admitting what both admit, and nothing either refuses")
+    (is (false? ((gate/compose (fn [_] false) (fn [_] (throw (ex-info "child ran" {})))) {}))
+        "a refusing parent means the child is never called")
+    (is (nil? (:wb/gates (meta a))) "a lone predicate carries nothing")))

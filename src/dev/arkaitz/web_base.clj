@@ -621,6 +621,17 @@
   `dev.arkaitz.web-base.plugin` — what `handler` builds from, to read at the REPL."
   plugin/expand)
 
+(defn param
+  "Parameter `k` — the field's name, a string, as the stack keys `:params` — when it is
+  one string, and nil otherwise: absent, sent twice (Ring reads a repeated field as a
+  vector, whose printed form is no value of the field) or a file. A query, form or
+  multipart field alike. It never trims and never coerces. A multi-select reads
+  `(get-in request [:params k])` itself: a string for one choice, a vector for several,
+  nil for none."
+  [request k]
+  (let [v (get-in request [:params k])]
+    (when (string? v) v)))
+
 (def path-for
   "`(path-for source route-name)`, `(path-for source route-name params)`,
   `(path-for source route-name params query)` → the path of the route named

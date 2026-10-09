@@ -6,8 +6,8 @@
   The wiring convention IS the product, so here it is, outermost first:
 
     request-id → security headers → proxy (opt-in) → body limit
-    → [/wb/ assets → sessionless routes → host static → ] error boundary → session → params
-    → i18n → multipart (declared routes only) → csrf → subject
+    → [/wb/ assets → sessionless routes → host static → ] error boundary → session → subject
+    → params → i18n → multipart (declared routes only) → csrf
     → ring-handler
         router, per matched route: error → gate → render → coercion → handler
         default handler: 404 / 405 / nil-handler 500
@@ -19,8 +19,9 @@
   cookie arrives. The body limit sits outside all of them, so nothing reads more than
   it allows; multipart sits outside csrf because the token is one of its fields, and
   inside i18n so a refused upload's page speaks the negotiated language. Session sits
-  outside subject
-  (the subject function reads the session) and outside csrf (the token lives
+  just outside subject (the subject function reads the session), and subject outside
+  everything after it, so a `:locale-fn` can read the subject and a refused request's
+  page knows who asked (since 0.17.0); session sits outside csrf (the token lives
   in the session); params sits outside csrf because the token may arrive as a
   form field; i18n sits outside csrf so a refused request's error page speaks
   the negotiated language. Error sits outside gate and render inside the
@@ -589,11 +590,13 @@
     ;; The router rides on the handler's metadata, where `reitit.ring/get-router` and
     ;; `path-for` look: every wrapper below is a new function, which would lose it.
     (-> (ring/ring-handler router (error/default-handler render-error))
-        (gate/wrap-subject subject-fn)
         (cond-> csrf? (security/wrap-csrf render-error))
         (wrap-multipart multipart-for render-error)
         (cond-> i18n (i18n/wrap i18n))
         params/wrap-params
+        ;; Just inside the session it reads, and outside everything else: a `:locale-fn`
+        ;; and the error page of a refused upload or token see who is asking.
+        (gate/wrap-subject subject-fn)
         (session/wrap (:session config))
         ;; The outer error boundary: what throws in the session store, params, i18n,
         ;; csrf or the subject function — a database that is down, above all — is the

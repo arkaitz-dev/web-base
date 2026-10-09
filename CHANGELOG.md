@@ -5,6 +5,28 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.17.0 — unreleased
+
+From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
+
+- **Breaking:** the subject is computed just inside the session, where it was innermost:
+  a `:locale-fn` reads `(:wb/subject request)` — a person's chosen language without a
+  second read of the session — and the page of a refused CSRF token or upload knows who
+  asked (H1). The subject function therefore sees the session, the headers, the request
+  id and the nonce, and no longer `:params`, `:query-params`, `:form-params`,
+  `:multipart-params`, `:wb/tr`, `:wb/locale` or the CSRF token. A subject read from
+  a parameter is no subject now; none of the set's consumers read one. It is still
+  called once per request, and never for a sessionless route.
+- `wb/path-for` builds a route's path from its `:name`, from a request the router
+  answered, the handler or a router; an unknown name, or a missing or empty path
+  parameter, is refused naming the route. The handler carries its router in its
+  metadata, so `reitit.ring/get-router` on it is true at last — the README's recipe,
+  `get-router` on a request, answered nil (H20).
+- `wb/router` builds the router `handler` answers with, for a path built where neither a
+  request nor the handler is at hand: an API mounted under `:sessionless`.
+- `wb/param` reads a field as one string or nil — absent, repeated (Ring's vector) or a
+  file — never trimmed or coerced (H23).
+
 ## 0.16.0 — 2026-10-08
 
 From what building `booking`, a third application, cost (its `FRICTION.md`).

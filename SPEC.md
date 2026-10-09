@@ -605,7 +605,8 @@ recommended option 1; the author's call stands, and this paragraph is its paper 
   refused, and a language the site lists with no strings of its own names the request
   while its strings fall back.
 - Per request the base computes the preference list — `(:locale-fn request)` when the
-  host supplies one (a preference kept in the session, a cookie, a URL prefix), else the
+  host supplies one (the subject's own choice, a preference kept in the session, a
+  cookie, a URL prefix), else the
   parsed `Accept-Language` — followed by the default locale.
 - It puts on the request `:wb/tr`, Tempura's translate function bound to that list, and
   `:wb/locale`, the **first supported** locale in the list, resolved the way Tempura

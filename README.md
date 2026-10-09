@@ -258,7 +258,7 @@ cookie again, which that store could never revoke anyway.
 |---|---|
 | `:routes` | reitit route data (required) |
 | `:session` | `{:key base64-or-bytes}` or `{:store ring-session-store}` (required); `:cookie-attrs`, `:cookie-name` (default `ring-session`) and `:renew {:every-ms :absolute-ms}` optional |
-| `:subject-fn` | request → subject or nil; default: always nil |
+| `:subject-fn` | request → subject or nil; default: always nil. It runs just inside the session (since 0.17.0) and sees the session and the headers — no parameter, translation or CSRF token, all computed after it |
 | `:login-path` | where a refusal without a subject goes; required iff a route has `:wb/gate`, and then a route of the router that answers GET and is not gated itself (since 0.13.0) |
 | `:coercion` | a reitit coercion, passed through |
 | `:static` | `create-resource-handler` options for the host's assets, e.g. `{:root "public"}` |
@@ -319,9 +319,13 @@ It is the product, so it is written down, outermost first:
 
 ```
 request-id → security headers → proxy (opt-in) → body limit → [assets, sessionless]
-→ error boundary → session → params → i18n → multipart (declared routes) → csrf → subject
+→ error boundary → session → subject → params → i18n → multipart (declared routes) → csrf
 → router: error → gate → render → coercion → handler
 ```
+
+The subject is computed just inside the session (since 0.17.0; it was innermost), so a
+`:locale-fn` reads `(:wb/subject request)` — a person's chosen language — and the page of
+a refused upload or CSRF token knows who asked.
 
 The outer error boundary exists for what throws before the router — a session store
 whose database is down, above all, or a subject function that fails: that is the base's

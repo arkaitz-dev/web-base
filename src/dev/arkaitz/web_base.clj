@@ -250,9 +250,14 @@
   the answer does not depend on any inner layer having run. Any other value, or the key
   on one method's data where a match cannot see it, is refused naming the route.
 
-  A path that matches no route has no template, and logs as it came: a mistyped or
-  truncated link to a marked route — a trailing slash, a segment a scanner appended —
-  is a 404 whose line shows the secret it carried."
+  A path that matches no route has no template. When it starts with the static part of a
+  marked route's template — `/login/redeem/` for `/login/redeem/:token` — it logs as
+  that part and `…` (since 0.17.0): a mistyped or truncated link to a marked route, a
+  trailing slash, a segment a scanner appended, carries the secret all the same. A
+  marked route whose template starts with its parameter (`/:token`) makes every request
+  that matches no route — whatever answers it, a sessionless one included — log as `/…`.
+  Anything else that matches nothing logs as it came; so does a prefix spelt in other
+  case or with an encoded slash, which no route would answer either."
   [router]
   (doseq [[path data] (r/routes router)]
     (when-not (contains? #{nil :template} (:wb/log-path data))
@@ -264,11 +269,24 @@
       (throw (ex-info (str "web-base: route " path " sets :wb/log-path under " method
                            "; put it on the route's own data, where it covers every method")
                       {:config-key [:routes path method :wb/log-path]}))))
-  (fn [request]
-    (let [match (r/match-by-path router (:uri request))]
-      (if (= :template (get-in match [:data :wb/log-path]))
-        (:template match)
-        (:uri request)))))
+  (let [prefixes (->> (r/routes router)
+                      (keep (fn [[template data]]
+                              (when (= :template (:wb/log-path data))
+                                ;; The earliest parameter, whichever its spelling: the
+                                ;; first spelling found could sit after another.
+                                (when-let [cut (some->> [":" "*" "{"] (keep #(str/index-of template %)) seq (apply min))]
+                                  (subs template 0 cut)))))
+                      distinct
+                      (sort-by count >))]
+    (fn [request]
+      (let [uri   (:uri request)
+            match (r/match-by-path router uri)]
+        (cond
+          (= :template (get-in match [:data :wb/log-path])) (:template match)
+          match                                             uri
+          :else (if-let [prefix (some #(when (str/starts-with? (str uri) %) %) prefixes)]
+                  (str prefix "…")
+                  uri))))))
 
 (defn- too-large! [^Throwable e]
   (if (security/body-failure e)

@@ -24,6 +24,12 @@ From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
   `get-router` on a request, answered nil (H20).
 - `wb/router` builds the router `handler` answers with, for a path built where neither a
   request nor the handler is at hand: an API mounted under `:sessionless`.
+- **Breaking (a log line):** a request that matches no route but starts with the static
+  part of a route marked `:wb/log-path :template` — a trailing slash, an appended segment,
+  a truncated link — logs that part and `…` (`GET /login/redeem/… 404`), where it logged
+  the secret whole (H9). auth-base's own redeem and attach routes are covered without a
+  word from the host. A marked `/:token` makes every unmatched request log as `/…`; a
+  prefix in another case or with an encoded slash still logs as it came.
 - `wb/param` reads a field as one string or nil — absent, repeated (Ring's vector) or a
   file — never trimmed or coerced (H23).
 

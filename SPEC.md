@@ -642,8 +642,10 @@ query string.
 is its last segment. A route whose data says `:wb/log-path :template` is logged by its
 route template, in the access line and in every error line of the base, decided by
 matching the router before anything else runs, so a session store that throws first
-cannot put the token in the log. A path that matches no route keeps its own spelling;
-what the host puts in an exception's data the base cannot see.
+cannot put the token in the log. **Amended for 0.17.0:** a path that matches no route
+but starts with a marked template's static part — up to its earliest parameter — logs as
+that part and `…`, the near miss of a secret link; any other unmatched path keeps its own
+spelling. What the host puts in an exception's data the base cannot see.
 
 **What Ring does not ship**, checked 2026-09-08 in the jars: `ring-core` carries no
 security headers and no CSRF protection. They live in sibling libraries by the same

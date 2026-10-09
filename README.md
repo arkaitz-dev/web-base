@@ -827,14 +827,20 @@ nothing, and is refused, as is any value but `:template`.
 A parent's mark reaches every route under it, and a child cannot take it back — reitit
 merges a `nil` as no value — so a group marked for a secret stays hidden whole.
 
-It hides the path only where the route matches. A request that misses it — a trailing
-slash, a segment a mail client or link scanner appended — is a 404 logged as it came, and
-a `:sessionless` path is one no route may match, so a secret there cannot be hidden this
-way: a sessionless endpoint whose credential travels with the request — a calendar feed,
-a webhook — takes it in the query string, which the line never shows, or in a header,
-and never in a path segment. Nor can the base keep a secret out of an exception the host throws: a logged
-`ex-info` prints its data, so an `ex-info` carrying the request or its `:path-params`
-logs the token with it.
+A request that misses the route — a trailing slash, a segment a mail client or link
+scanner appended — is a 404 logged by the template's static part (since 0.17.0):
+`GET /login/redeem/… 404`, the secret left out. A marked route whose template starts with
+a parameter — `/:token`, or `/:lang/reset/:token` — makes every request no route matches,
+a sessionless one included, log as `/…`; mark it only if that is what you want. The
+prefix is compared as spelt: `/T/<token>/` or `/t%2F<token>` logs as it came.
+
+A `:sessionless` path is one no route may match, so it cannot be marked — it is hidden
+only when it happens to sit under a marked route's prefix — and a secret there is kept
+out of the line another way: a sessionless endpoint whose credential travels with the
+request — a calendar feed, a webhook — takes it in the query string, which the line
+never shows, or in a header, and never in a path segment. Nor can the base keep a secret
+out of an exception the host throws: a logged `ex-info` prints its data, so an `ex-info`
+carrying the request or its `:path-params` logs the token with it.
 
 ### Configuration, and not exporting secrets on every start
 

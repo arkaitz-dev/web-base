@@ -452,9 +452,14 @@ link nobody sent cannot put words on the page:
   [:p {:role "status"} ((:wb/tr request) k)])
 ```
 
-**A link to a route** is a string the host builds, or reitit's own reverse routing: give
-the route a `:name` and ask `(reitit.core/match-by-name (reitit.ring/get-router request)
-::team {:team-id id})`. Nothing checks at boot that every link resolves.
+**A link to a route** is built from its name (since 0.17.0): give the route a `:name` and
+ask `(wb/path-for request ::team {:team-id id})`, or with a query,
+`(wb/path-for request ::team {:team-id id} {:outcome "saved"})`. The source is the
+request a page is answering, or — for a link built outside any request, a job's mail —
+the handler `wb/handler` returned, which carries its router (`#ig/ref` the handler key).
+An unknown name or a missing path parameter is refused naming the route, so a renamed
+route fails where it is used, not as a link to nowhere. Nothing checks at boot that every
+link resolves; a test that reads the names your source spells against the router does.
 
 **A file upload** is declared on its route (since 0.10.0), and only there is a
 `multipart/form-data` body parsed — to temporary files, and before CSRF has judged the

@@ -33,6 +33,7 @@
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.i18n :as i18n]
             [dev.arkaitz.web-base.log :as log]
+            [dev.arkaitz.web-base.paths :as paths]
             [dev.arkaitz.web-base.plugin :as plugin]
             [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.response :as response]
@@ -569,6 +570,8 @@
     (check-assets! assets stylesheets router sessionless)
     (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
           multipart-for (multipart-spec router body-limit)]
+    ;; The router rides on the handler's metadata, where `reitit.ring/get-router` and
+    ;; `path-for` look: every wrapper below is a new function, which would lose it.
     (-> (ring/ring-handler router (error/default-handler render-error))
         (gate/wrap-subject subject-fn)
         (cond-> csrf? (security/wrap-csrf render-error))
@@ -589,7 +592,8 @@
         (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)
         (log/wrap-request-id (logged-path router))
-        (cond-> (seq stylesheets) (wrap-stylesheets stylesheets)))))))
+        (cond-> (seq stylesheets) (wrap-stylesheets stylesheets))
+        (with-meta {::r/router router}))))))
 
 (def translator
   "`(translator i18n-config prefs)` → the translate function `:wb/tr` is, for words
@@ -600,6 +604,14 @@
   "`(expand config)` → the plain config its `:plugins` stand for, merged by the rules of
   `dev.arkaitz.web-base.plugin` — what `handler` builds from, to read at the REPL."
   plugin/expand)
+
+(def path-for
+  "`(path-for source route-name)`, `(path-for source route-name params)`,
+  `(path-for source route-name params query)` → the path of the route named
+  `route-name`. `source` is a request the router answered, the handler `handler`
+  returned, or a router; an unknown name or a missing path parameter is refused naming
+  the route."
+  paths/path-for)
 
 (def redirect-for
   "`(redirect-for request path)`: a 303 for a navigation, an `HX-Redirect` for an htmx

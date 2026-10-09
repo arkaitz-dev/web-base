@@ -487,6 +487,32 @@
   (let [sheets (vec stylesheets)]
     (fn [request] (handler (assoc request :wb/stylesheets sheets)))))
 
+(defn- build-router
+  "The router `handler` answers with, and `router` hands out: one construction, so a
+  path built outside a request is the path a request is answered at."
+  [routes coercion login-path render-error]
+  ;; Before the router: reitit refuses some of these trees for its own reasons, which
+  ;; would hide this one's.
+  (check-method-gates! routes)
+  (ring/router routes
+               {:meta-merge gate/merge-route-data
+                :data (cond-> {:middleware [(error/middleware render-error)
+                                            (gate/middleware {:login-path   login-path
+                                                              :render-error render-error})
+                                            render/middleware
+                                            coercion/coerce-request-middleware]}
+                        coercion (assoc :coercion coercion))}))
+
+(defn router
+  "The router `handler` builds from `config`, plugins' routes included, built the same
+  way — for a path built where neither a request nor the handler is at hand: an API that
+  is itself one of the config's `:sessionless` handlers cannot take the handler it is
+  part of. `(wb/path-for (wb/router config) name params)`."
+  [config]
+  (let [{:keys [routes coercion login-path error-layout] :as config} (plugin/expand config)]
+    (require-key! config :routes)
+    (build-router routes coercion login-path (error/renderer {:error-layout error-layout}))))
+
 (defn handler
   "Builds the Ring handler from the host's config:
 
@@ -553,17 +579,7 @@
         ;; and a layout that throws there has nothing left to catch it (and must not be
         ;; asked to render its own failure). The base's own page asks for nothing.
         bare-error   (error/renderer {})
-        ;; Before the router: reitit refuses some of these trees for its own reasons,
-        ;; which would hide this one's.
-        _            (check-method-gates! routes)
-        router       (ring/router routes
-                                  {:meta-merge gate/merge-route-data
-                                   :data (cond-> {:middleware [(error/middleware render-error)
-                                                               (gate/middleware {:login-path   login-path
-                                                                                 :render-error render-error})
-                                                               render/middleware
-                                                               coercion/coerce-request-middleware]}
-                                           coercion (assoc :coercion coercion))})]
+        router       (build-router routes coercion login-path render-error)]
     (refuse-shadowing! router sessionless)
     (check-gates-wired! router)
     (check-login-path! router login-path)

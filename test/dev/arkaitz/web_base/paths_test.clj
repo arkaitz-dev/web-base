@@ -92,9 +92,9 @@
     (is (false? (contains? @sl ::r/router)) "a sessionless request carries no router: it is answered before it")
     (doseq [[label source message]
             [["a sessionless request" @sl
-              "web-base: path-for :dev.arkaitz.web-base.paths-test/team: this request was not answered by the router — a sessionless route or an asset — so it carries none; pass the handler `wb/handler` returned"]
+              "web-base: path-for :dev.arkaitz.web-base.paths-test/team: this request was not answered by the router — a sessionless route or an asset — so it carries none; pass the handler `wb/handler` returned, or `wb/router`'s router"]
              ["a map" {}
-              "web-base: path-for :dev.arkaitz.web-base.paths-test/team: this request was not answered by the router — a sessionless route or an asset — so it carries none; pass the handler `wb/handler` returned"]
+              "web-base: path-for :dev.arkaitz.web-base.paths-test/team: this request was not answered by the router — a sessionless route or an asset — so it carries none; pass the handler `wb/handler` returned, or `wb/router`'s router"]
              ["a bare function" ok
               "web-base: path-for :dev.arkaitz.web-base.paths-test/team: this function carries no router; pass the handler `wb/handler` returned"]
              ["a var" #'ok "web-base: path-for :dev.arkaitz.web-base.paths-test/team: the source must be a request, the handler or a router"]
@@ -113,3 +113,61 @@
           "Integrant hands over the function wb/handler built, its router the one requests carry")
       (is (= "/t/7" (wb/path-for h ::team {:team-id "7"})) "so a job given the key builds a link from it")
       (finally (ig/halt! sys)))))
+
+(defn- outer [_] true)
+(defn- inner [_] true)
+(defn- lo [slots] (:content slots))
+(defn- li [slots] (:content slots))
+
+(defn- gated-config
+  "A config with a gated group and a gated child under it, a plugin's route, and `seen`
+  keeping the request the child answered: what `handler` merges, `router` must merge."
+  [seen]
+  (assoc (config (atom nil) (atom nil))
+         :subject-fn (constantly {:id 1})
+         :login-path "/in"
+         :routes [["/in" {:name ::in :get ok}]
+                  ["/g" {:wb/gate outer :wb/layouts [lo]}
+                   ["/c/:id" {:name ::child :wb/gate inner :wb/layouts [li]
+                              :get (fn [request] (reset! seen request) (ok request))}]]
+                  ["/plain" {:name ::plain :get ok}]]))
+
+(deftest router-builds-the-router-handler-answers-with--plugins-and-nested-gates-included
+  (let [seen   (atom nil)
+        cfg    (gated-config seen)
+        R      (wb/router cfg)
+        app    (wb/handler cfg)
+        H      (::r/router (meta app))
+        shape  (fn [router] (mapv (fn [[t d]] [t (:name d)]) (r/routes router)))
+        nested (fn [router] (let [d (:data (r/match-by-name router ::child {:id "5"}))]
+                              [(:wb/layouts d) (:wb/gates (meta (:wb/gate d)))]))
+        path   (wb/path-for R ::child {:id "5"})
+        status (:status (app (mock/request :get path)))]
+    (is (= 200 status) "witness: the handler answers the path wb/router built")
+    (is (identical? H (::r/router @seen)) "witness: and answered it with the router in its metadata")
+    (is (= [[["/in" ::in] ["/g/c/:id" ::child] ["/plain" ::plain] ["/pl/:id" :pl/item]]
+            [["/in" ::in] ["/g/c/:id" ::child] ["/plain" ::plain] ["/pl/:id" :pl/item]]]
+           [(shape R) (shape H)])
+        "wb/router lists the routes handler answers, the host's then the plugins', in order")
+    (is (= [[[lo li] [outer inner]] [[lo li] [outer inner]]] [(nested R) (nested H)])
+        "a nested route's data is merged as handler merges it: the child's gate composed with its parent's")
+    (is (= "/g/c/5" path) "the path built from wb/router")
+    (is (= [ "/pl/9" 200] [(wb/path-for R :pl/item {:id "9"}) (:status (app (mock/request :get "/pl/9")))])
+        "and a plugin's, answered by the handler")))
+
+(deftest router-refuses-a-config-without-routes-and-needs-no-session
+  (let [cfg (gated-config (atom nil))
+        pl  [{:wb.plugin/name :pl :routes [["/pl/:id" {:name :pl/item :get ok}]]}]]
+    (is (= [::in ::child ::plain :pl/item] (r/route-names (wb/router cfg))) "control: the config with :routes builds")
+    (doseq [c [{:session {:key KEY}} {} {:routes nil}]]
+      (is (= ["web-base: config needs :routes" {:config-key [:routes]}] (refusal #(wb/router c)))
+          (str (pr-str c) ": refused naming the key — never an empty router that names no route")))
+    (is (= [:pl/item] (r/route-names (wb/router {:plugins pl})))
+        "a plugin's routes are :routes, as for handler: the key is checked after expand")
+    (is (= [[::in ::child ::plain :pl/item] ["web-base: config needs :session" {:config-key [:session]}]]
+           [(r/route-names (wb/router (dissoc cfg :session))) (refusal #(wb/handler (dissoc cfg :session)))])
+        "router needs no :session, where handler does: it is for a place with no handler")
+    (is (= ["web-base: route /g declares :wb/gate under a method and has routes under it, which could widen it — put the gate on the route's own data"
+            {:config-key [:routes] :path "/g"}]
+           (refusal #(wb/router (assoc cfg :routes [["/g" {:get {:wb/gate outer :handler ok}} ["/c" {:name ::c :get ok}]]]))))
+        "handler's checks on the routes are router's too: one construction")))

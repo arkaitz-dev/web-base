@@ -2,7 +2,7 @@
   "Paths built from a route's `:name`, never spelt by hand: a route moved moves every
   link, redirect and mail with it. The router is the one the base built, read from a
   request it answered (`:reitit.core/router`), from the handler `handler` returned (its
-  metadata), or given as a router."
+  metadata), or given as a router (`wb/router`)."
   (:require [reitit.core :as r]))
 
 (defn- router-of [source route-name]
@@ -10,7 +10,7 @@
     (map? source)                (or (::r/router source)
                                      (throw (ex-info (str "web-base: path-for " route-name ": this request was not"
                                                           " answered by the router — a sessionless route or an asset —"
-                                                          " so it carries none; pass the handler `wb/handler` returned")
+                                                          " so it carries none; pass the handler `wb/handler` returned, or `wb/router`'s router")
                                                      {:route route-name})))
     (fn? source)                 (or (::r/router (meta source))
                                      (throw (ex-info (str "web-base: path-for " route-name ": this function carries no"

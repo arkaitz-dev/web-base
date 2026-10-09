@@ -175,36 +175,93 @@
 (def ^:private base-assets
   (ring/create-resource-handler {:path "/wb/" :root "dev/arkaitz/web_base/public"}))
 
+(defn- guarded-renderer
+  "The host's `:render-error` as the base can trust it: a renderer that throws, or answers
+  nil, is logged and answered with the base's bare page — it runs outside the outer error
+  boundary, where nothing is left to catch it, and a nil would hand the request to the
+  session this mount exists to avoid."
+  [render-error bare-error]
+  (fn [datum request]
+    (let [answer (try (render-error datum request)
+                      (catch Throwable t
+                        (tools-log/error t "sessionless :render-error threw" {:request-id (:wb/request-id request)
+                                                                             :uri        (log/path-of request)})
+                        ::threw))]
+      (cond
+        (= ::threw answer) (bare-error datum request)
+        (nil? answer)      (do (tools-log/error "sessionless :render-error answered nil" {:request-id (:wb/request-id request)
+                                                                                           :uri        (log/path-of request)})
+                               (bare-error datum request))
+        :else              answer))))
+
+(defn- sessionless-entry
+  "A `:sessionless` value as one shape: a function or var is `{:handler it}`, and a
+  `:render-error` the host gave is guarded."
+  [v bare-error]
+  (let [entry (if (map? v) v {:handler v})]
+    (cond-> entry
+      (:render-error entry) (update :render-error guarded-renderer bare-error))))
+
+(defn- sessionless-finder
+  "`(fn [uri] path)`: the `:sessionless` path that answers `uri` — the exact path, else
+  the longest prefix ending in `/` under which it falls — or nil."
+  [routes]
+  (let [prefixes (sort-by (comp - count) (filter #(str/ends-with? % "/") (keys routes)))]
+    (fn [uri]
+      (if (contains? routes uri)
+        uri
+        (some #(when (str/starts-with? uri %) %) prefixes)))))
+
+(defn- sessionless-renderer
+  "`(fn [datum request] response)` for a request: the error renderer of the sessionless
+  path that answers it, when that path declared one, else `render-error`. What the body
+  limit refuses before any handler runs is rendered by it too, so an API mounted under
+  a prefix answers its 413 in its own format."
+  [routes render-error]
+  (let [find      (sessionless-finder routes)
+        renderers (update-vals routes #(:render-error (sessionless-entry % render-error)))]
+    (fn [datum request]
+      ((or (some-> (find (:uri request)) renderers) render-error) datum request))))
+
 (defn- sessionless-handler
   "The host's `:sessionless` routes, any method, each inside the base's error middleware
-  so a throw renders the base's 500 rather than reaching the server. A path ending in `/`
-  answers everything under it — an API mounted beside the pages — and an exact path wins
-  over it, the longest such prefix over a shorter one. A nil answer is a 500 too, logged:
-  falling through to the next handler would hand the request to the session this mount
-  exists to avoid."
+  so a throw renders an error rather than reaching the server — with the route's own
+  `:render-error` when it declares one (since 0.17.0), the base's bare page otherwise. A
+  path ending in `/` answers everything under it — an API mounted beside the pages — and
+  an exact path wins over it, the longest such prefix over a shorter one. A nil answer is
+  a 500 too, logged: falling through to the next handler would hand the request to the
+  session this mount exists to avoid."
   [routes render-error]
   (when (seq routes)
-    (let [wrap     (:wrap (error/middleware render-error))
-          handlers (update-vals routes wrap)
-          prefixes (sort-by (comp - count) (filter #(str/ends-with? % "/") (keys routes)))
-          find     (fn [uri] (or (get handlers uri)
-                                 (some #(when (str/starts-with? uri %) (get handlers %)) prefixes)))]
+    (let [find     (sessionless-finder routes)
+          handlers (update-vals routes
+                                (fn [v]
+                                  (let [{:keys [handler] :as entry} (sessionless-entry v render-error)
+                                        render (or (:render-error entry) render-error)]
+                                    [((:wrap (error/middleware render)) handler) render])))]
       (fn [request]
-        (when-let [h (find (:uri request))]
+        (when-let [[h render] (some->> (find (:uri request)) (get handlers))]
           (or (h request)
               (do (tools-log/error "sessionless handler returned nil" {:request-id (:wb/request-id request)
                                                                 :uri        (log/path-of request)})
-                  (render-error {:status 500} request))))))))
+                  (render {:status 500} request))))))))
+
+(defn- handler-like? [x] (or (fn? x) (var? x)))
 
 (defn- validate-sessionless! [routes]
   (when (some? routes)
     (when-not (and (map? routes)
                    (every? #(and (string? %) (str/starts-with? % "/") (not= "/" %) (not (str/starts-with? % "/wb/")))
                            (keys routes))
-                   (every? #(or (fn? %) (var? %)) (vals routes)))
-      (throw (ex-info (str "web-base: config :sessionless must be a map of path to handler, each path"
-                           " starting with / and none under /wb/, which is the base's, nor / itself,"
-                           " which would take every page away from the session")
+                   (every? #(or (handler-like? %)
+                                (and (map? %)
+                                     (handler-like? (:handler %))
+                                     (every? #{:handler :render-error} (keys %))
+                                     (or (nil? (:render-error %)) (handler-like? (:render-error %)))))
+                           (vals routes)))
+      (throw (ex-info (str "web-base: config :sessionless must be a map of path to handler — a function, or"
+                           " {:handler f :render-error g} — each path starting with / and none under /wb/,"
+                           " which is the base's, nor / itself, which would take every page away from the session")
                       {:config-key [:sessionless]})))))
 
 (defn- covers?
@@ -555,8 +612,11 @@
     :sessionless  `{\"/health\" handler \"/api/\" handler}` — answered before the session,
                   CSRF, i18n and subject, with the request id, security headers and body
                   limit only; a path ending in `/` takes everything under it, an exact
-                  path winning; a handler is a function or a var; a path or prefix that
-                  covers one of :routes is refused, and so is `/` (optional)
+                  path winning; a handler is a function or a var, or `{:handler h
+                  :render-error (fn [datum request] response)}` (since 0.17.0), whose
+                  renderer answers the errors the base decides for that path — a throw,
+                  a nil answer, the body limit's 413 — in the host's own format; a path
+                  or prefix that covers one of :routes is refused, and so is `/` (optional)
     :max-body-bytes  the largest request body read, 200 000 by default; a route's
                   `:wb/multipart` sets its own (optional)
     :assets       `[{:path \"/name/\" :root \"classpath/prefix\"}]`, served beside `/wb/`,
@@ -625,7 +685,8 @@
         ;; Outside the assets and the sessionless routes, so no path reads a body the
         ;; limit has not seen. A body read past it throws the 413 datum wherever it is
         ;; read, and the error boundary around the reader renders it.
-        (security/wrap-body-limit #(or (:max-body-bytes (multipart-for %)) body-limit) bare-error)
+        (security/wrap-body-limit #(or (:max-body-bytes (multipart-for %)) body-limit)
+                                  (sessionless-renderer sessionless bare-error))
         (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)
         (log/wrap-request-id (logged-path router))

@@ -333,7 +333,8 @@ whose database is down, above all, or a subject function that fails: that is the
 base's own page, never your `:error-layout`: out there the request has no session,
 translations or subject for a layout to read, and a layout that threw would have nothing
 left to catch it. No negotiated language either, since i18n is inside. `:sessionless`
-routes that throw get the same page, for the same reason.
+routes that throw get the same page, for the same reason, unless the path brought its own
+`:render-error` (since 0.17.0; see "An API beside the pages").
 
 A route may add its own `:middleware` in route data; reitit merges it
 **innermost**, inside the base's four, so it wraps the handler only. It sees
@@ -745,6 +746,15 @@ headers, body limit and error page. Its value can be a whole reitit application:
 :sessionless {"/health" (response/health #(db/ready? db 2))
               "/api/"   (ring/ring-handler (ring/router api-routes) (constantly {:status 404 :body ""}))}
 ```
+
+An API answers its own errors in its own format: give the path a map,
+`{:handler api :render-error (fn [datum request] response)}` (since 0.17.0), and the
+errors the base decides there — a throw, a nil answer, a body past the limit, declared or
+found by reading it — are rendered by your function, with your codec, from a datum
+carrying at least `:status`: the whole datum you threw with `error/throw!`, `:title` and
+`:detail` included. A renderer that throws or answers nil is logged and answered with the
+base's own page. Without it a JSON client gets the base's page: HTML, or text when it
+asks for JSON.
 
 A prefix that covers one of `:routes` is refused. A sessionless handler receives the
 request as it came: no params middleware runs before it, so it reads `:query-string`

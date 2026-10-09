@@ -30,6 +30,10 @@ From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
   the secret whole (H9). auth-base's own redeem and attach routes are covered without a
   word from the host. A marked `/:token` makes every unmatched request log as `/…`; a
   prefix in another case or with an encoded slash still logs as it came.
+- A `:sessionless` value may be `{:handler h :render-error f}`: `f` renders the errors the
+  base decides for that path — a throw, a nil answer, the body limit's 413 — so an API
+  under `/api/` answers them in its own format, not the base's page (H19). A renderer
+  that throws or answers nil is logged and falls back to the base's page.
 - `wb/param` reads a field as one string or nil — absent, repeated (Ring's vector) or a
   file — never trimmed or coerced (H23).
 

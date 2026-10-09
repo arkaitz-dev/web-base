@@ -607,8 +607,9 @@
                        ["a path under the base's /wb/" {"/wb/health" identity}]
                        ["a handler that is not a function" {"/health" "ok"}]
                        ["the root, which as a prefix would take every page" {"/" identity}]]]
-    (is (= [(str "web-base: config :sessionless must be a map of path to handler, each path starting with / and none"
-                 " under /wb/, which is the base's, nor / itself, which would take every page away from the session")
+    (is (= [(str "web-base: config :sessionless must be a map of path to handler — a function, or"
+                 " {:handler f :render-error g} — each path starting with / and none under /wb/,"
+                 " which is the base's, nor / itself, which would take every page away from the session")
             {:config-key [:sessionless]}]
            (try (wb/handler (config :sessionless bad)) nil
                 (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))

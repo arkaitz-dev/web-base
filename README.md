@@ -766,6 +766,21 @@ carrying at least `:status`: the whole datum you threw with `error/throw!`, `:ti
 base's own page. Without it a JSON client gets the base's page: HTML, or text when it
 asks for JSON.
 
+What every API host otherwise finds out by a bug (helpdesk's, measured):
+
+- Mount its routes with `(ring/ring-handler (ring/router api-routes) (error/default-handler
+  render))`, `render` the same function as `:render-error`: a path with no route is a 404
+  and a known path with another method a 405 with `Allow`, in your format.
+- Read the body whole, then parse it inside a `try` of its own: a body past the limit
+  throws the base's 413 as it is read, and a parser's `try` around the read would turn it
+  into your 400. Nesting deep enough to fit the limit can overflow a recursive parser's
+  stack — catch `StackOverflowError` there too, and answer 400: it is the body's fault.
+- A field is one string or nothing: `wb/param` is for forms; for a query string read
+  without params middleware, refuse a repeated or undecodable value rather than drop it.
+- Test it with `(testing/call handler :post "/api/x" {:headers {"authorization" "Bearer …"}
+  :body "{…}"})` (since 0.17.0): one request as a program sends it — no cookie, no CSRF
+  token — which `visit`, a browser, refuses to send. `:chunked? true` sends no length.
+
 A prefix that covers one of `:routes` is refused. A sessionless handler receives the
 request as it came: no params middleware runs before it, so it reads `:query-string`
 itself (`ring.util.codec/form-decode`). For a 401, auth-base's

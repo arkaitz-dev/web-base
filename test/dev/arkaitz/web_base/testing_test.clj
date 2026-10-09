@@ -506,13 +506,13 @@
         b       (assoc (testing/browser spy) :token "t")
         files   {"f" {:filename "a" :bytes (byte-array 1)}}
         refused (fn [f] (try (f) ::sent (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))]
-    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a GET to /x has none" {:path "/x" :method :get}]
+    (is (= ["web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a GET to /x has none" {:path "/x" :method :get}]
            (refused #(testing/visit b :get "/x" nil {:files files})))
         "a GET: refused naming the method")
-    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
+    (is (= ["web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
            (refused #(testing/visit b :delete "/x" nil {:htmx? true :files files})))
         "an htmx DELETE, whose params go in the query: refused naming the method")
-    (is (= ["web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
+    (is (= ["web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a DELETE to /x has none" {:path "/x" :method :delete}]
            (refused #(testing/visit (testing/browser spy) :delete "/x" nil {:htmx? true :files files})))
         "before the missing token is noticed")
     (is (= [] @hits) "nothing was sent")

@@ -39,6 +39,11 @@ From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
   `response/attachment` answers a download under a name, RFC 6266's `filename*` for
   anything past ASCII (H22). `:max-file-count` keeps its meaning — every part — now said
   plainly in the README.
+- `testing/call` sends one request as a program does — no jar, no CSRF token, a raw body
+  and query string — for an API under `:sessionless`, which `visit` cannot drive;
+  `visit {:multipart? true}` sends a form with no file as multipart; `testing/header`
+  reads one header's value (H16, H8). The README's API section gathers the protocol an
+  API host otherwise re-finds.
 - `wb/param` reads a field as one string or nil — absent, repeated (Ring's vector) or a
   file — never trimmed or coerced (H23).
 

@@ -156,20 +156,21 @@
         (keys htmx/fragment-headers)))
 
 (defn- extra-headers
-  "`headers` with lower-cased names, refused naming the first one `visit` owns, or the
+  "`headers` with lower-cased names, refused naming the first one `who` owns, or the
   first name, in sort order, given twice in different cases — which spelling a map kept
   would be chance."
-  [path headers]
-  (let [lowered (into {} (map (fn [[k v]] [(lower (name k)) v])) headers)]
-    (when (< (count lowered) (count headers))
-      (let [twice (first (sort (for [[k n] (frequencies (map #(lower (name %)) (keys headers))) :when (< 1 n)] k)))]
-        (throw (ex-info (str "web-base: visit was given the " twice " header twice, in different cases")
-                        {:path path :header twice}))))
-    (when-let [owned (first (filter owned-headers (sort (keys lowered))))]
-      (throw (ex-info (str "web-base: visit writes the " owned " header itself — "
-                           "pass the jar, the token or {:htmx? true} instead of setting it")
-                      {:path path :header owned})))
-    lowered))
+  ([path headers] (extra-headers "visit" owned-headers "pass the jar, the token or {:htmx? true} instead of setting it"
+                                 path headers))
+  ([who owned instead path headers]
+   (let [lowered (into {} (map (fn [[k v]] [(lower (name k)) v])) headers)]
+     (when (< (count lowered) (count headers))
+       (let [twice (first (sort (for [[k n] (frequencies (map #(lower (name %)) (keys headers))) :when (< 1 n)] k)))]
+         (throw (ex-info (str "web-base: " who " was given the " twice " header twice, in different cases")
+                         {:path path :header twice}))))
+     (when-let [taken (first (filter owned (sort (keys lowered))))]
+       (throw (ex-info (str "web-base: " who " writes the " taken " header itself — " instead)
+                       {:path path :header taken})))
+     lowered)))
 
 (def ^:private boundary "wb-test-boundary-7MA4YWxkTrZu0gW")
 
@@ -190,12 +191,12 @@
     (.toByteArray out)))
 
 (defn- request-of
-  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers files]}]
+  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers files multipart?]}]
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
         fields   (when (and (unsafe? method) (not (params-in-query? method)))
                    (cond-> (vec params) (not htmx?) (conj ["__anti-forgery-token" token])))
-        [bytes type] (cond (and fields (seq files))
+        [bytes type] (cond (and fields (or (seq files) multipart?))
                            [(multipart-body fields files) (str "multipart/form-data; boundary=" boundary)]
                            fields
                            [(.getBytes ^String (form-body fields) "UTF-8") "application/x-www-form-urlencoded; charset=UTF-8"])]
@@ -216,6 +217,62 @@
                        :content-type type)
                 (assoc-in [:headers "content-type"] type)
                 (assoc-in [:headers "content-length"] (str (alength ^bytes bytes)))))))
+
+(defn header
+  "The one value of header `name` in a response, whatever the case of its key, or nil —
+  the first, when Ring holds several (since 0.17.0)."
+  [response name]
+  (first (header-values (:headers response) name)))
+
+(defn call
+  "One request to `handler` as a program sends it — no jar, no CSRF token, no redirect
+  followed — for an API mounted under `:sessionless`, which `visit`, a browser, cannot
+  drive (since 0.17.0). `path` may carry a query string, sent as written, malformed
+  escapes included; an absolute URL is taken for its path and query, the host being
+  always `localhost`. `opts`:
+
+  - `:headers` — a map, names lower-cased as Ring has them; `host`, `content-type` and
+    `content-length` are `call`'s own and refused, and so is a name given twice in
+    different cases;
+  - `:body` — a string, sent as UTF-8, or bytes; with it `:content-type` defaults to
+    `application/json`;
+  - `:content-type` — the body's type;
+  - `:chunked? true` — no declared length, as a chunked body arrives;
+  - `:remote-addr` — the source address.
+
+  `:content-type` or `:chunked?` without a body, or a body that is neither a string nor
+  bytes, is refused: a test would otherwise assert about a request that was never sent.
+  Answers the handler's response as it is; reading a JSON body is the host's codec."
+  ([handler method path] (call handler method path {}))
+  ([handler method path {:keys [headers body content-type chunked? remote-addr]}]
+   (when-not (or (nil? body) (string? body) (bytes? body))
+     (throw (ex-info (str "web-base: call sends a body that is a string or bytes, and was given a "
+                          (.getName (class body)) " — encode it first")
+                     {:path path})))
+   (when (and (nil? body) (or content-type chunked?))
+     (throw (ex-info "web-base: call was given :content-type or :chunked? with no :body to send"
+                     {:path path})))
+   (let [[uri qs]  (split-path path)
+         headers   (extra-headers "call" #{"host" "content-type" "content-length"}
+                                  "pass :body, :content-type or :chunked? instead" path headers)
+         bytes     (cond (nil? body) nil
+                         (bytes? body) body
+                         :else (.getBytes ^String body "UTF-8"))
+         type      (when bytes (or content-type "application/json"))]
+     (handler
+      (cond-> {:request-method method
+               :uri            uri
+               :scheme         :http
+               :server-name    "localhost"
+               :server-port    80
+               :remote-addr    (or remote-addr "127.0.0.1")
+               :protocol       "HTTP/1.1"
+               :headers        (assoc headers "host" "localhost")}
+        qs    (assoc :query-string qs)
+        bytes (-> (assoc :body (java.io.ByteArrayInputStream. ^bytes bytes) :content-type type)
+                  (assoc-in [:headers "content-type"] type))
+        (and bytes (not chunked?)) (-> (assoc :content-length (alength ^bytes bytes))
+                                       (assoc-in [:headers "content-length"] (str (alength ^bytes bytes)))))))))
 
 (defn location
   "The response's `Location`, whatever the case of the header's key, or nil."
@@ -252,8 +309,15 @@
     or a swap's — throws, because setting it would fake what the test exercises.
   - `{:files {\"photo\" {:filename \"a.png\" :content-type \"image/png\" :bytes b}}}` sends a
     POST, PUT or PATCH as `multipart/form-data`, with its params and the CSRF field as
-    parts beside the files — what a form with a file input sends. On any other method it
-    throws, since there is no body to carry them.
+    parts beside the files — what a form with a file input sends. A vector of pairs,
+    `[[\"photo\" a] [\"photo\" b]]`, repeats the field as `<input multiple>` does. On any
+    other method it throws, since there is no body to carry them.
+  - `{:multipart? true}` sends a POST, PUT or PATCH as `multipart/form-data` with no file
+    (since 0.17.0) — what a form with `enctype=\"multipart/form-data\"` sends when nothing
+    was chosen. Without it, a form with no file is sent urlencoded: `:params` still holds
+    its fields, but `:multipart-params` — what a handler of a multipart form reads — is
+    nil. Sent to a route that declares no `:wb/multipart`, nothing parses it and its token
+    is unseen: the 403 of `:files` there.
   - `{:follow? false}` sends one request and follows nothing, for a test that asks who
     answered: a handler that redirects to a gated page lands on the login page exactly
     as the gate would. The jar still takes what the response set.
@@ -268,8 +332,8 @@
      (throw (ex-info (str "web-base: a browser form sends only GET and POST — a "
                           (.toUpperCase (name method) Locale/ROOT) " to " path " is htmx's; pass {:htmx? true}")
                      {:path path :method method})))
-   (when (and (seq (:files opts)) (not (#{:post :put :patch} method)))
-     (throw (ex-info (str "web-base: {:files …} goes in the body of a POST, PUT or PATCH, and a "
+   (when (and (or (seq (:files opts)) (:multipart? opts)) (not (#{:post :put :patch} method)))
+     (throw (ex-info (str "web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a "
                           (.toUpperCase (name method) Locale/ROOT) " to " path " has none")
                      {:path path :method method})))
    (when (and (unsafe? method) (not (:token b)))

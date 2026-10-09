@@ -4,7 +4,9 @@
   layouts; `see-other` is the redirect after a classic form. There is no
   `not-found` or `forbidden` here on purpose: those are `error/throw!`, so
   they reach the error renderer and not the layout stack."
-  (:require [clojure.tools.logging :as log]))
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log])
+  (:import [java.net URLEncoder]))
 
 (defn health
   "A handler for a health probe, for `:sessionless`: `ready?` is asked on every request,
@@ -47,3 +49,25 @@
   `dev.arkaitz.web-base/rerender` renders the page's own GET instead."
   ([body] (assoc (ok body) :status 422))
   ([body opts] (assoc (ok body opts) :status 422)))
+
+(defn- disposition
+  "`attachment` with the name twice, as RFC 6266 has it: an ASCII fallback, every
+  character outside printable ASCII and every quote or backslash an underscore, and the
+  name itself percent-encoded as RFC 5987 spells it — `URLEncoder` writes a space as `+`
+  and leaves `*` alone, neither of which it allows."
+  [filename]
+  (str "attachment; filename=\"" (str/replace filename #"[^\x20-\x7E]|[\"\\]" "_") "\"; filename*=UTF-8''"
+       (-> (URLEncoder/encode ^String filename "UTF-8") (str/replace "+" "%20") (str/replace "*" "%2A"))))
+
+(defn attachment
+  "A download: `body` — bytes, a stream, a file — sent as `application/octet-stream`, to
+  be saved under `filename` and never shown, whatever type it was uploaded with (since
+  0.17.0). A blank name is refused: a download with none is saved under whatever the
+  browser makes of the URL. No caching rule is imposed: a file of somebody's is `(assoc-in r [:headers
+  \"Cache-Control\"] \"private, no-store\")`, a brochure is not."
+  [body filename]
+  (when (str/blank? (str filename))
+    (throw (ex-info "web-base: attachment needs a file name, and was given none" {:filename filename})))
+  {:status  200
+   :headers {"Content-Type" "application/octet-stream" "Content-Disposition" (disposition (str filename))}
+   :body    body})

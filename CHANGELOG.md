@@ -34,6 +34,11 @@ From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
   base decides for that path — a throw, a nil answer, the body limit's 413 — so an API
   under `/api/` answers them in its own format, not the base's page (H19). A renderer
   that throws or answers nil is logged and falls back to the base's page.
+- `wb/uploads` answers a multipart field's files, one or several alike — the empty part
+  of an empty file input left out, the name its last segment — and
+  `response/attachment` answers a download under a name, RFC 6266's `filename*` for
+  anything past ASCII (H22). `:max-file-count` keeps its meaning — every part — now said
+  plainly in the README.
 - `wb/param` reads a field as one string or nil — absent, repeated (Ring's vector) or a
   file — never trimmed or coerced (H23).
 

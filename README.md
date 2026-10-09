@@ -472,11 +472,21 @@ request, since the token is one of its fields:
 
 ```clojure
 ["/avatar" {:wb/multipart {:max-file-size 1048576 :max-file-count 3}
-            :post (fn [request] (let [{:keys [filename size tempfile]} (get-in request [:multipart-params "photo"])] …))}]
+            :post (fn [request] (let [[{:keys [filename size tempfile]}] (wb/uploads request "photo")] …))}]
 ```
 
+`wb/uploads` (since 0.17.0) answers the field's files as `{:filename :content-type
+:tempfile :size}`, one or several alike: the empty part a browser sends for a file input
+left empty is left out, the name is its last segment — nothing a `/` or `\` separates,
+never `.` or `..` — and a part with no type is `application/octet-stream`. The name is
+still the sender's: keep it as a label and store the file under a key of your own, since
+on some filesystems a name like `C:x.png` or `CON` means more than a name. To send a file back,
+`(response/attachment bytes-or-stream filename)` is a download under its name, its
+non-ASCII spelt as RFC 6266 wants; add `Cache-Control` yourself when it is somebody's.
+
 `:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
-other fields included; `:max-body-bytes` bounds the whole body, and without it the route
+other fields included — so it is your files plus the form's other fields, and a field
+added to the form takes a file away from the limit unless you raise it; `:max-body-bytes` bounds the whole body, and without it the route
 takes its file size plus the base's limit. A part past them, or a body past them as it is
 read, is the 413 page in the negotiated language; a body whose declared length is already
 past the route's bound is refused before it is read, with the base's own 413 page, since

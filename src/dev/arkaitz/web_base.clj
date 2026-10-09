@@ -714,6 +714,34 @@
   (let [v (get-in request [:params k])]
     (when (string? v) v)))
 
+(defn- file-name
+  "The last segment of the name a part was sent with — a browser on another system may
+  send a whole path, `C:\\Users\\a\\photo.png` — or `file` when none is left, or when
+  what is left is `.` or `..`, which a host joining it to a directory would read as one."
+  [filename]
+  (let [segment (last (remove str/blank? (str/split (str filename) #"[/\\]")))]
+    (if (or (nil? segment) (#{"." ".."} segment)) "file" segment)))
+
+(defn uploads
+  "The files the multipart field `field` carries, as `{:filename :content-type :tempfile
+  :size}`, one or several alike, on a route that declares `:wb/multipart`. A browser
+  sends a part with no name for a file input left empty, which is no file and is left
+  out; an empty file a person chose has its name, and is kept. The name is its last
+  segment — nothing a `/` or `\\` separates, never `.` or `..` — and still the
+  sender's: on Windows `C:x.png`, `a.txt:stream` or `CON` mean more than a name, so
+  store a file under a key of your own, never under it. A part with no type is
+  `application/octet-stream`. The
+  temporary files die with the request: copy what you keep before you answer. Bounds of
+  your own — a column's length — are yours to apply."
+  [request field]
+  (let [parts (get-in request [:multipart-params field])]
+    (vec (for [{:keys [filename content-type tempfile size]} (if (map? parts) [parts] (filter map? parts))
+               :when (and tempfile (not (str/blank? filename)))]
+           {:filename     (file-name filename)
+            :content-type (or (not-empty content-type) "application/octet-stream")
+            :tempfile     tempfile
+            :size         size}))))
+
 (def path-for
   "`(path-for source route-name)`, `(path-for source route-name params)`,
   `(path-for source route-name params query)` → the path of the route named

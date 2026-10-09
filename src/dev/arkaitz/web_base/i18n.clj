@@ -3,7 +3,8 @@
   dictionary keyed by locale, a default locale, the locales the site speaks — `:locales`,
   and without it the default alone (since 0.12.0) — and optionally a function returning
   the request's own preference list (the subject's own choice — `:wb/subject` is on the
-  request since 0.17.0 — or one kept in the session, a cookie, a URL prefix). The languages are the host's decision and nobody else's: a plugin's
+  request since 0.17.0 — or one kept in the session, a cookie, a URL prefix). The
+  languages are the host's decision and nobody else's: a plugin's
   dictionary never adds one, and a host dictionary in a locale `:locales` does not name is
   refused rather than served half the time. The base puts
   two things on the request: `:wb/tr`, Tempura's translate function bound to

@@ -5,7 +5,7 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
-## 0.17.0 — unreleased
+## 0.17.0 — 2026-10-09
 
 From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).
 

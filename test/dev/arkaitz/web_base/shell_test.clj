@@ -7,8 +7,10 @@
             [clojure.test :refer [deftest is testing]]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.render :as render]
+            [dev.arkaitz.web-base.security :as security]
             [dev.arkaitz.web-base.shell :as shell]
             [dev.arkaitz.web-base.testing :as testing]
+            [hiccup2.core :as h]
             [reitit.ring :as ring]
             [ring.mock.request :as mock])
   (:import [java.security MessageDigest]))
@@ -52,18 +54,86 @@
          (html {:request {:wb/nonce "abc+/=="}}))
       "nonce lands on the htmx script only"))
 
-(deftest csrf-token-in-hx-headers-inherited-on-body-iff-present--and-all-three-together
-  (is (= (str "<html>" SKEL)
-         (html {:request {}}))
-      "no token, no hx-headers")
-  (is (= (str "<html>" HEAD-START ASSETS "</head><body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok/ABC+123=&quot;}\">"
-              "<main class=\"wb-main\"></main></body></html>")
-         (html {:request {:anti-forgery-token "tok/ABC+123="}}))
-      "token → hx-headers:inherited on body with key X-CSRF-Token")
-  (is (= (str "<html lang=\"es\">" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script></head>"
-              "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok&quot;}\"><main class=\"wb-main\"></main></body></html>")
-         (html {:request {:anti-forgery-token "tok" :wb/nonce "n1" :wb/locale "es"}}))
-      "lang, nonce and token compose"))
+(def ^:private TOKEN "tok/ABC+123=")
+(def ^:private BODY-TOKEN "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok/ABC+123=&quot;}\">")
+
+(defn- token-request
+  "A request carrying a token and its own fresh read flag, as `wrap-csrf` builds one: a
+  flag shared between cases would make every later `true` vacuous."
+  []
+  {:anti-forgery-token TOKEN ::security/csrf-used (volatile! false)})
+
+(defn- with-token [main] (str "<html>" HEAD-START ASSETS "</head>" BODY-TOKEN main "</body></html>"))
+
+(deftest token-on-body-iff-the-rendered-body-uses-it--htmx-attribute-in-any-slot-or-a-form-that-read-it--and-the-read-itself
+  (testing "a formless, hx-free page: the token is neither emitted nor read"
+    (let [req (token-request)]
+      (is (= (str "<html>" SKEL) (html {:request req})) "no hx, no form → no hx-headers on <body>")
+      (is (false? @(::security/csrf-used req)) "formless, hx-free → no token read (csrf-used stays false)")))
+  (testing "an attribute that merely contains hx- is not one htmx acts on"
+    (let [req (token-request)]
+      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><a class=\"hx-link\" href=\"/docs/hx-boost\" id=\"hx-doc\">docs</a></main></body></html>")
+             (html {:request req :content [:a {:href "/docs/hx-boost" :id "hx-doc" :class "hx-link"} "docs"]}))
+          "hx- inside a value is not an attribute → no token")
+      (is (false? @(::security/csrf-used req)) "and no read")))
+  (doseq [[label slots main]
+          [["hx-post keyword attribute"
+            {:content [:button {:hx-post "/x"} "go"]}
+            "<main class=\"wb-main\"><button hx-post=\"/x\">go</button></main>"]
+           ["data-hx- prefix"
+            {:content [:a {:data-hx-get "/x"} "go"]}
+            "<main class=\"wb-main\"><a data-hx-get=\"/x\">go</a></main>"]
+           ["upper-case attribute, which an HTML parser lower-cases"
+            {:content [:button {:HX-Post "/x"} "go"]}
+            "<main class=\"wb-main\"><button HX-Post=\"/x\">go</button></main>"]
+           ["lazy content, untouched before the call"
+            {:content (for [x ["a" "b"]] [:button {:hx-post (str "/" x)} x])}
+            "<main class=\"wb-main\"><button hx-post=\"/a\">a</button><button hx-post=\"/b\">b</button></main>"]
+           ["a bare boolean attribute, as hiccup renders {:hx-boost true}"
+            {:content [:div {:hx-boost true} "x"]}
+            "<main class=\"wb-main\"><div hx-boost>x</div></main>"]
+           ["raw HTML"
+            {:content (h/raw "<button hx-post=\"/x\">go</button>")}
+            "<main class=\"wb-main\"><button hx-post=\"/x\">go</button></main>"]
+           ["hx only in :header"
+            {:header [:a {:hx-get "/h"} "h"] :content [:p "c"]}
+            "<header class=\"wb-header\"><a hx-get=\"/h\">h</a></header><main class=\"wb-main\"><p>c</p></main>"]
+           ["hx only in :nav"
+            {:nav [:a {:hx-get "/n"} "n"] :content [:p "c"]}
+            "<nav class=\"wb-nav\"><a hx-get=\"/n\">n</a></nav><main class=\"wb-main\"><p>c</p></main>"]
+           ["hx only in :identity"
+            {:identity [:a {:hx-get "/i"} "i"] :content [:p "c"]}
+            "<div class=\"wb-identity\"><a hx-get=\"/i\">i</a></div><main class=\"wb-main\"><p>c</p></main>"]
+           ["hx only in :footer"
+            {:footer [:a {:hx-get "/f"} "f"] :content [:p "c"]}
+            "<main class=\"wb-main\"><p>c</p></main><footer class=\"wb-footer\"><a hx-get=\"/f\">f</a></footer>"]]]
+    (testing label
+      (let [req (token-request)]
+        (is (= (with-token main) (html (assoc slots :request req))) (str label " → token on <body>"))
+        (is (true? @(::security/csrf-used req)) (str label " → the token was read, so the session keeps it")))))
+  (testing "a form in lazy content, no htmx: the field read the token while the body rendered"
+    (let [req  (token-request)
+          form (map (fn [_] [:form (security/csrf-field req)]) [:once])]
+      (is (false? @(::security/csrf-used req)) "witness: nothing read the token before the shell ran")
+      (is (= (with-token "<main class=\"wb-main\"><form><input name=\"__anti-forgery-token\" type=\"hidden\" value=\"tok/ABC+123=\"></form></main>")
+             (html {:request req :content form}))
+          "the body's token and the field's are one, and the decision came after the form rendered")
+      (is (true? @(::security/csrf-used req)))))
+  (testing "content that read the token itself, with no form and no htmx — a meta for a script"
+    (let [req  (token-request)
+          read (map (fn [_] [:span {:data-token (security/csrf-token req)}]) [:once])]
+      (is (= (with-token "<main class=\"wb-main\"><span data-token=\"tok/ABC+123=\"></span></main>")
+             (html {:request req :content read}))
+          "a read by the content puts the token on <body> too: the session keeps it either way")))
+  (testing "an htmx page under `:csrf false` carries no token, because there is none"
+    (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+           (html {:request {} :content [:button {:hx-post "/x"} "go"]}))
+        "no token on the request → no hx-headers, never an empty one"))
+  (testing "lang, nonce and token compose"
+    (is (= (str "<html lang=\"es\">" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script></head>"
+                "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok&quot;}\"><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+           (html {:request {:anti-forgery-token "tok" :wb/nonce "n1" :wb/locale "es" ::security/csrf-used (volatile! false)}
+                  :content [:button {:hx-post "/x"} "go"]})))))
 
 (deftest works-as-the-outermost-route-layout-through-render-middleware
   (let [app (ring/ring-handler
@@ -81,8 +151,10 @@
 
 (defn- app-with-shell []
   (wb/handler {:routes   [["/" {:wb/layouts [shell/page]
-                                :get  (fn [_] {:status 200 :body [:p "hi"]})
-                                :post (fn [_] {:status 200 :body [:p "posted"]})}]]
+                                :get  (fn [_] {:status 200 :body [:p "hi"]})}]
+                          ["/hx" {:wb/layouts [shell/page]
+                                  :get  (fn [_] {:status 200 :body [:button {:hx-post "/hx"} "go"]})
+                                  :post (fn [_] {:status 200 :body [:p "posted"]})}]]
                :session  {:key KEY}
                :security {:csp "script-src 'nonce-{nonce}'"}}))
 
@@ -94,13 +166,32 @@
     (is (= 1 (count (re-seq #"nonce=\"" (:body r)))) "exactly one nonce attribute in the page")
     (is (str/starts-with? (:body r) "<!DOCTYPE html>\n<html><head>"))))
 
+(deftest a-formless-hx-free-page-writes-no-session-and-is-not-marked-private--the-same-app-does-both-for-an-htmx-page
+  (let [app (app-with-shell)
+        r   (app (mock/request :get "/"))
+        c   (app (mock/request :get "/hx"))]
+    (is (= 200 (:status r)))
+    (is (str/ends-with? (:body r) "</head><body><main class=\"wb-main\"><p>hi</p></main></body></html>")
+        "witness: the page rendered through the shell, with a bare <body>")
+    (is (= [] (testing/header-values (:headers r) "Set-Cookie"))
+        (str "a formless, hx-free page set a session cookie: " (testing/header-values (:headers r) "Set-Cookie")))
+    (is (nil? (testing/csrf-token r)) "and carries no token")
+    (is (nil? (get-in r [:headers "Cache-Control"])) "nothing read the token, so the page is not marked private")
+    (testing "control: the same app, an htmx page"
+      (let [token (testing/csrf-token c)]
+        (is (= ["ring-session"] (vec (keys (testing/cookies c)))) "the htmx page wrote the session")
+        (is (= "no-store" (get-in c [:headers "Cache-Control"])))
+        (is (and (string? token) (re-matches #"[A-Za-z0-9+/]{80}" token)))
+        (is (str/includes? (:body c) (str "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;" token
+                                          "&quot;}\"><main class=\"wb-main\"><button hx-post=\"/hx\">go</button></main>")))))))
+
 (deftest token-embedded-in-hx-headers-is-the-one-wrap-csrf-accepts--round-trip
   (let [app    (app-with-shell)
-        first* (app (mock/request :get "/"))
+        first* (app (mock/request :get "/hx"))
         token  (testing/csrf-token first*)
         post   (fn [base & headers] (let [r (reduce (fn [q [k v]] (mock/header q k v)) (mock/header base "HX-Request" "true") (partition 2 headers))
                                           out (app r)] [(:status out) (:body out)]))
-        bare   (mock/request :post "/")
+        bare   (mock/request :post "/hx")
         jarred (testing/with-cookies bare first*)
         frag   "<div class=\"wb-error\" data-status=\"403\"><strong class=\"wb-error-status\">403</strong></div>"]
     (is (str/includes? (:body first*) "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;") "the shell put the token on <body>")

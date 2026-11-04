@@ -693,6 +693,25 @@ this base's product.
   be given the new token after the fact: the base logs it by name and the new session
   still gets a fresh one. An htmx fragment that rotates is answered with `HX-Refresh`,
   because the page around it keeps the old token in `<body>`'s `hx-headers`.
+  **Amended 2026-11-04: the shell reads the token only for a page that uses it.**
+  Reading it was unconditional in the shell, so every page it rendered wrote a session,
+  and a public, crawled page with no form cost a row per visitor (measured in the
+  shop, the set's third study: an anonymous `GET /` on an empty shop wrote one row,
+  three visits three). The shell now renders the body first and reads the token only
+  when the rendered body carries an attribute htmx acts on (`hx-…` or `data-hx-…`) or
+  its content already read the token for a form. "Every htmx request carries it" above
+  therefore means every htmx request from a page whose markup uses htmx. A page that
+  reaches htmx only from a script (`htmx.ajax`, `fetch`) reads `csrf-token` itself. A
+  page with a classic form still costs a row, because its field needs the token; a
+  stateless token would remove that too, and is not taken: ring-anti-forgery's signed
+  and encrypted strategies bind the token to an identity an anonymous visitor does not
+  have, which makes it a bearer value anyone can replay. The base still marks a
+  response `no-store` when the request arrived with a session (`gate/wrap-subject`):
+  the shell's read had been doing that for an anonymous visitor's page painted from the
+  session, a cart in the header. What is left cacheable is a page for a request with no
+  session — a crawler's — and a shared cache in front of the host that stores HTML must
+  key it on the `Cookie` header, or a visitor with a session is served the crawler's
+  page. Before this, no page drawn by the shell was cacheable at all.
 - **Static assets answer before the session.** The base's `/wb/` files and the host's
   own assets are served from outside the session, CSRF and locale layers: a stylesheet
   fetch never reads the store nor mints a session cookie, and a shared cache may keep

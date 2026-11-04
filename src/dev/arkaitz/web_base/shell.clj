@@ -11,8 +11,20 @@
   tag and the CSRF token, sent on every htmx request as `X-CSRF-Token`
   through `hx-headers:inherited` on `<body>` (SPEC §15) — htmx 4 inherits
   nothing without the modifier. A `<script>` the host adds through `:head`
-  needs its own `nonce` attribute, read from `(:wb/nonce request)`."
-  (:require [dev.arkaitz.web-base.security :as security]))
+  needs its own `nonce` attribute, read from `(:wb/nonce request)`.
+
+  The token goes on `<body>` only when the page uses it: when the rendered body
+  carries an htmx attribute (`hx-…` or `data-hx-…`), or when its content already
+  read the token for a form. Reading it is what writes it into the session, so a
+  page with neither — a public page, crawled — leaves no session behind. The body
+  is rendered before that decision, so a form or an htmx attribute inside lazy
+  content counts. What it cannot see is htmx reached from a script
+  (`htmx.ajax`, `fetch`) on a page with neither, or attributes under a prefix the host
+  configured for htmx in place of `data-hx-`: such a page reads `security/csrf-token`
+  itself, into a `meta` of `:head`."
+  (:require [dev.arkaitz.web-base.render :as render]
+            [dev.arkaitz.web-base.security :as security]
+            [hiccup2.core :as h]))
 
 (def css-path "/wb/wb.css")
 (def htmx-path "/wb/htmx.min.js")
@@ -22,11 +34,28 @@
   [token]
   (str "{\"" security/csrf-header "\":\"" token "\"}"))
 
+(def ^:private htmx-attribute
+  "An attribute htmx acts on, as the body renders it: htmx 4 reads both prefixes. Text
+  that merely spells one only makes the shell send the token, as it always did."
+  #"(?i)\s(?:data-)?hx-[a-z]")
+
+(defn- token-for
+  "The token, read only when `body` — the rendered body — needs it."
+  [request body]
+  (when (or (some-> (::security/csrf-used request) deref)
+            (re-find htmx-attribute body))
+    (security/csrf-token request)))
+
 (defn page
   [{:keys [lang title head header nav content footer request] who :identity}]
   (let [lang  (or lang (:wb/locale request))
         nonce (:wb/nonce request)
-        token (security/csrf-token request)]
+        body  (render/html (list (when header [:header.wb-header header])
+                                 (when nav [:nav.wb-nav nav])
+                                 (when who [:div.wb-identity who])
+                                 [:main.wb-main content]
+                                 (when footer [:footer.wb-footer footer])))
+        token (token-for request body)]
     [:html (cond-> {} lang (assoc :lang lang))
      [:head
       [:meta {:charset "utf-8"}]
@@ -37,8 +66,4 @@
       [:script (cond-> {:src htmx-path :defer true} nonce (assoc :nonce nonce))]
       head]
      [:body (cond-> {} token (assoc (keyword "hx-headers:inherited") (csrf-headers token)))
-      (when header [:header.wb-header header])
-      (when nav [:nav.wb-nav nav])
-      (when who [:div.wb-identity who])
-      [:main.wb-main content]
-      (when footer [:footer.wb-footer footer])]]))
+      (h/raw body)]]))

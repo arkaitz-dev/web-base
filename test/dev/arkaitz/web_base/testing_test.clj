@@ -99,18 +99,22 @@
           (testing/csrf-token {:body (io/input-stream (.getBytes "x"))})])
       "nil, not a throw, when the body is not a string or has no token")
   (let [app    (wb/handler {:routes  [["/" {:wb/layouts [shell/page]
-                                            :get  (fn [_] {:status 200 :body [:p "hi"]})
+                                            ;; htmx and no form: the token is the shell's alone.
+                                            :get  (fn [_] {:status 200 :body [:button {:hx-post "/"} "go"]})
                                             :post (fn [_] {:status 200 :body "posted"})}]]
                             :session {:key KEY}})
         r      (app (mock/request :get "/"))
         t      (testing/csrf-token r)
         oracle (second (re-find #"hx-headers:inherited=\"\{&quot;X-CSRF-Token&quot;:&quot;([^&]+)&quot;\}\"" (:body r)))]
-    (is (and (string? oracle) (re-matches #"[A-Za-z0-9+/]{80}" oracle)) "the shell embedded a token (independent regex)")
+    (is (nil? (re-find #"__anti-forgery-token" (:body r))) "witness: the fixture renders no hidden field")
+    (is (and (string? oracle) (re-matches #"[A-Za-z0-9+/]{80}" oracle)) "the shell embedded a token (independent regex) — an htmx page must carry one")
     (is (= oracle t) "csrf-token reads the shell's real token whole")
     (is (= [200 "posted"]
            (let [out (app (-> (mock/request :post "/") (testing/with-cookies r) (assoc-in [:headers "x-csrf-token"] t)))]
              [(:status out) (:body out)]))
-        "and wrap-csrf accepts it")))
+        "and wrap-csrf accepts it")
+    (is (= 403 (:status (app (-> (mock/request :post "/") (testing/with-cookies r) (assoc-in [:headers "x-csrf-token"] "nope")))))
+        "control: a wrong token is refused")))
 
 (deftest fragment-adds-exactly-the-header-the-classifier-reads--and-nothing-else
   (let [req   (mock/request :get "/")

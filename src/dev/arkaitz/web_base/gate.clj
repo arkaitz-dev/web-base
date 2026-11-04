@@ -32,14 +32,18 @@
   cached generation (revocation within N seconds instead of at the next request). A
   route that needs no subject at all belongs in `:sessionless`.
 
-  A response to a request with a subject, or one that writes the session, gets
-  `Cache-Control: no-store` unless the handler said otherwise: it is somebody's own."
+  A response to a request with a subject, to a request that arrived with a session, or
+  one that writes the session, gets `Cache-Control: no-store` unless the handler said
+  otherwise: it is somebody's own. The session half is an anonymous visitor's — a cart
+  painted in the header from the session. Until 0.18.0 the shell's unconditional read of
+  the CSRF token marked every page it drew, and that hid the case; a request with no
+  session, a crawler's, stays cacheable."
   [handler subject-fn]
   (fn [request]
     (let [subject  (subject-fn request)
           response (handler (assoc request :wb/subject subject))]
       (cond-> response
-        (or (some? subject) (contains? response :session)) security/private))))
+        (or (some? subject) (seq (:session request)) (contains? response :session)) security/private))))
 
 (def refusal-headers
   "A refusal depends on the session and on the kind of request: never cached,

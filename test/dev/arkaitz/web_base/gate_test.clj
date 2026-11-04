@@ -177,7 +177,12 @@
         "an anonymous response that writes the session is somebody's too")
     (is (= {:status 200 :body ""} (wrap {:status 200 :body ""} nil))
         "control: an anonymous response that writes nothing is untouched, so a public page stays cacheable")
-    (is (nil? (wrap nil "ana")) "a nil response stays nil")))
+    (is (nil? (wrap nil "ana")) "a nil response stays nil")
+    (let [arrived (fn [session] ((gate/wrap-subject (constantly {:status 200 :body ""}) (constantly nil)) {:uri "/" :session session}))]
+      (is (= {"Cache-Control" "no-store"} (:headers (arrived {:shop/cart {"p1" 2}})))
+          "an anonymous visitor's request with a session — a cart painted from it — is somebody's too, written or not")
+      (is (= {:status 200 :body ""} (arrived {}))
+          "control: Ring's empty session, a request with no cookie, leaves a public page cacheable"))))
 
 (deftest redirect-for-sends-a-navigation-with-a-303-and-a-swap-with-hx-redirect--both-uncached
   (is (= {:status 303 :headers (assoc REFUSAL "Location" "/orgs") :body ""} (gate/redirect-for (get* "/x") "/orgs"))

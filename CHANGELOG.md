@@ -5,6 +5,26 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.18.0 — 2026-11-05
+
+From what building `shop`, a fifth application, cost (its `FRICTION.md`).
+
+- **Breaking:** the shell reads the CSRF token, and so writes it into the session, only
+  for a page whose rendered body carries an htmx attribute (`hx-…`, `data-hx-…`) or whose
+  content already read the token for a form (S5). A public page with neither, crawled,
+  leaves no session behind; until now every page the shell drew wrote one. A page that
+  calls htmx only from a script, with no form and no attribute, reads
+  `security/csrf-token` itself, into a `meta` of `:head`.
+- A response to a request that arrived with a session is marked `no-store`, as one to a
+  subject or one that writes the session already was. The shell's read had been doing it
+  for every page; an anonymous visitor's page painted from the session — a cart in the
+  header — keeps it. A request with no session, a crawler's, stays cacheable, and a
+  shared cache in front of the host keys HTML on `Cookie`.
+- `dev.arkaitz.web-base.csv`: `write` and `attachment`, a CSV export a spreadsheet
+  cannot run — UTF-8 with a byte order mark, every field quoted, CRLF, and a field
+  beginning with one of OWASP's CSV-injection characters (the full-width forms and the
+  line feed included) prefixed with an apostrophe.
+
 ## 0.17.0 — 2026-10-09
 
 From what building `helpdesk`, a fourth application, cost (its `FRICTION.md`).

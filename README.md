@@ -487,6 +487,12 @@ still the sender's: keep it as a label and store the file under a key of your ow
 on some filesystems a name like `C:x.png` or `CON` means more than a name. To send a file back,
 `(response/attachment bytes-or-stream filename)` is a download under its name, its
 non-ASCII spelt as RFC 6266 wants; add `Cache-Control` yourself when it is somebody's.
+A spreadsheet export is `(csv/attachment rows "orders.csv")` (since 0.18.0, namespace
+`dev.arkaitz.web-base.csv`). It writes UTF-8 with a byte order mark, quotes every field
+and ends lines in CRLF. A field a spreadsheet would run as a formula gets an apostrophe
+before it, so the user's text arrives as text: that is any field starting with `=`, `+`,
+`-`, `@`, a tab, a carriage return, a line feed, or a full-width `＝＋－＠`, OWASP's CSV
+injection list. `csv/write` gives the bytes alone.
 
 `:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
 other fields included — so it is your files plus the form's other fields, and a field

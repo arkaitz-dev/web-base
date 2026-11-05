@@ -5,6 +5,24 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.19.0 — 2026-11-05
+
+From the two candidates the shop round left open, decided by a panel.
+
+- Fixed: a POST carrying the CSRF field twice answered 500 — Ring reads a repeated field
+  as a vector, and ring-anti-forgery's comparison throws on one — so any anonymous POST
+  wrote a stack trace to the error log. It is the 403 refusal now, urlencoded and
+  multipart alike, and a field sent twice is never passed over for a header.
+- `wb/param` takes a value for an absent field: `(wb/param request k not-found)` answers it
+  only when the field was not sent, and nil, as before, when it was sent twice or is a
+  file. A host tells "not sent" from "sent wrong" and picks the status itself; the
+  two-argument form is unchanged.
+- Every asset — `/wb/`, each `:assets` root, the host's `:static` — answers
+  `Cache-Control: no-cache` unless its handler set one, the `304` included. A browser
+  kept the previous deploy's stylesheet for a tenth of its age; now it asks on every
+  load and an unchanged file costs a `304`. Ring answers `304` to an If-Modified-Since
+  later than the file, so a rollback to an older file is not seen without a reload.
+
 ## 0.18.0 — 2026-11-05
 
 From what building `shop`, a fifth application, cost (its `FRICTION.md`).

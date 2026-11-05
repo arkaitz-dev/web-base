@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.18.0"}
+dev.arkaitz/web-base {:mvn/version "0.19.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -78,8 +78,9 @@ sessions in a row is db-base's: one line each under `:plugins`, shown in their R
   every request, `<html lang>` that never lies.
 - **Web security**: `nosniff`, `X-Frame-Options`, `Referrer-Policy`, optional
   HSTS, a per-request CSP nonce, CSRF through ring-anti-forgery, opt-in proxy
-  headers. Static assets answer before the session, and answer a conditional
-  GET with `304`.
+  headers. Static assets answer before the session, are revalidated on every load
+  (`Cache-Control: no-cache`, since 0.19.0) and answer a conditional GET with `304`, so
+  a deploy's stylesheet reaches a returning browser at once.
 - **Test helpers** for the host's own suite: the cookies a response set, the
   CSRF token a page carries, a request shaped like an htmx swap.
 - **Lifecycle** as plain `start`/`stop` functions; an optional Integrant
@@ -448,6 +449,18 @@ answers a swap with its fragment, 200, and a navigation with a 303 to the locati
 this relies on htmx 4 swapping a 422; under htmx 2 a host would have to allow it in
 `htmx.config.responseHandling`. The fragment is built on every call and thrown away on a
 navigation; a host whose fragment costs queries branches on `htmx/partial-request?`.
+
+**One field, one string.** `(wb/param request "name")` is the field when it arrived once as
+a string, and nil when it is absent, sent twice or a file. When those must differ — an
+optional filter that means "all" when absent and is refused when sent twice — give it a
+value for absent (since 0.19.0) and choose the answer yourself:
+
+```clojure
+(let [typed (wb/param request "status" ::absent)]
+  (cond (= ::absent typed)      nil                              ; all of them
+        (some #{typed} statuses) typed
+        :else                   (error/throw! {:status 404})))   ; twice, or unknown
+```
 
 **A notice after a redirect** — "saved", "the invitation is on its way" — needs no
 session: the 303 names it in the query, and the page draws only names it knows, so a
@@ -952,14 +965,14 @@ and drop the variable:
 ```
 echo '{"WB_SESSION_KEY" "<base64 of 16 bytes>"}' > env.local.edn
 clojure -M:demo [port]
-clojure -T:build demo-uber && java -jar target/web-base-demo-0.18.0.jar [port]
+clojure -T:build demo-uber && java -jar target/web-base-demo-0.19.0.jar [port]
 ```
 
 ## Development
 
 ```
 clojure -M:test                 # the whole suite, demo included
-clojure -T:build jar            # target/web-base-0.18.0.jar
+clojure -T:build jar            # target/web-base-0.19.0.jar
 clojure -T:build install        # into ~/.m2
 CLOJARS_USERNAME=… CLOJARS_PASSWORD=<deploy token> clojure -T:build deploy
 ```

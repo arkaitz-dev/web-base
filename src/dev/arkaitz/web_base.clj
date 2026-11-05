@@ -53,6 +53,7 @@
             [ring.middleware.params :as params]
             [ring.util.request :as req])
   (:import [java.io File]
+           [java.util Locale]
            [org.apache.commons.fileupload2.core FileUploadException]))
 
 (def subject-present?
@@ -172,8 +173,7 @@
                            " in " (pr-str path) " — it takes " (pr-str (vec (sort allowed))))
                       {:config-key (conj path (first unknown))})))))
 
-(def ^:private base-assets
-  (ring/create-resource-handler {:path "/wb/" :root "dev/arkaitz/web_base/public"}))
+(def ^:private base-asset-options {:path "/wb/" :root "dev/arkaitz/web_base/public"})
 
 (defn- guarded-renderer
   "The host's `:render-error` as the base can trust it: a renderer that throws, or answers
@@ -428,23 +428,37 @@
             (finally (delete-all! created))))
         (handler request)))))
 
+(defn- revalidated
+  "`handler`'s answers marked `Cache-Control: no-cache` unless it set its own. With only
+  `Last-Modified` a browser keeps an asset for a tenth of its age without asking, and
+  served the previous deploy's stylesheet after one (seen 2026-11-05); `no-cache` makes
+  every load ask, and `wrap-not-modified` answers 304 when nothing changed. From a jar,
+  `Last-Modified` is the jar file's own time, so each deploy is a change."
+  [handler]
+  (fn [request]
+    (when-let [response (handler request)]
+      (if (some #(= "cache-control" (.toLowerCase (str %) Locale/ROOT)) (keys (:headers response)))
+        response
+        (assoc-in response [:headers "Cache-Control"] "no-cache")))))
+
+(defn- asset-handler [options]
+  (revalidated (not-modified/wrap-not-modified (ring/create-resource-handler options))))
+
 (defn- with-assets
   "Assets first — the base's `/wb/` before any other, so nothing can shadow the base's
   own, then each `:assets` root a plugin or the host named, then the host's sessionless
   routes, then its `:static`, then `app` for everything else. Only the assets answer
   conditional GETs with a 304: the resource handlers emit `Last-Modified` and nothing
-  else honoured it, so every page load re-sent htmx whole."
+  else honoured it, so every page load re-sent htmx whole. Every asset is revalidated on
+  each load (`revalidated`)."
   [assets static sessionless app]
   (apply ring/routes
-         (remove nil? [(not-modified/wrap-not-modified base-assets)
+         (remove nil? [(asset-handler base-asset-options)
                        (when (seq assets)
-                         (apply ring/routes
-                                (for [asset assets]
-                                  (not-modified/wrap-not-modified (ring/create-resource-handler asset)))))
+                         (apply ring/routes (map asset-handler assets)))
                        sessionless
                        (when static
-                         (not-modified/wrap-not-modified
-                          (ring/create-resource-handler (merge {:path "/"} static))))
+                         (asset-handler (merge {:path "/"} static)))
                        app])))
 
 (def ^:private local-href

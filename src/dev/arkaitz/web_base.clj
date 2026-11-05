@@ -709,10 +709,18 @@
   vector, whose printed form is no value of the field) or a file. A query, form or
   multipart field alike. It never trims and never coerces. A multi-select reads
   `(get-in request [:params k])` itself: a string for one choice, a vector for several,
-  nil for none."
-  [request k]
-  (let [v (get-in request [:params k])]
-    (when (string? v) v)))
+  nil for none.
+
+  With `not-found` (since 0.19.0), an absent field answers `not-found` and every other
+  shape answers as above, so a host tells \"not sent\" from \"sent wrong\" — an optional
+  filter or quantity that defaults when absent and is refused when repeated — and picks
+  the status itself."
+  ([request k] (param request k nil))
+  ([request k not-found]
+   (let [params (:params request)]
+     (if (contains? params k)
+       (let [v (get params k)] (when (string? v) v))
+       not-found))))
 
 (defn- file-name
   "The last segment of the name a part was sent with — a browser on another system may

@@ -27,11 +27,19 @@
                                 (wb/param r "photo")
                                 (get-in r [:params "photo"])]))})
 
+(defn- echo-not-found
+  "What `param` answers with a not-found value, for a text field and for a file field."
+  [r]
+  {:status 200
+   :body   (pr-str [(wb/param r "who" ::absent) (wb/param r "photo" ::absent)])})
+
 (def ^:private app
   (wb/handler {:session {:key KEY}
                :routes  [["/form" {:get (fn [r] (response/ok [:form (security/csrf-field r)]))}]
                          ["/p" {:get echo :post echo}]
-                         ["/m" {:wb/multipart {:max-file-size 1024} :post echo}]]}))
+                         ["/m" {:wb/multipart {:max-file-size 1024} :post echo}]
+                         ["/n" {:get echo-not-found :post echo-not-found}]
+                         ["/nm" {:wb/multipart {:max-file-size 1024} :post echo-not-found}]]}))
 
 (def ^:private photo {"photo" {:filename "a.png" :content-type "image/png" :bytes (.getBytes "PNG" "UTF-8")}})
 
@@ -57,6 +65,22 @@
         (is (= 200 status) "witness: the request reached the handler")
         (is (= (conj expected file) observation)
             "[raw value in :params, param \"who\", param :who, param \"photo\", the file part parsed]")))))
+
+(deftest param-with-not-found-answers-it-only-for-an-absent-field--a-repeat-or-a-file-is-still-nil
+  (doseq [[carrier method path opts photo-nf]
+          [["query" :get "/n" {} ::absent]
+           ["form" :post "/n" {} ::absent]
+           ["multipart" :post "/nm" {:files photo} nil]]
+          [shape params who-nf]
+          [["once" [["who" "Ada"]] "Ada"]
+           ["twice" [["who" "Ada"] ["who" "Bob"]] nil]
+           ["empty" [["who" ""]] ""]
+           ["absent" [] ::absent]]]
+    (testing (str carrier " " shape)
+      (let [[status observation] (observed method path params opts)]
+        (is (= 200 status) "witness: the request reached the handler")
+        (is (= [who-nf photo-nf] observation)
+            "[param \"who\" with not-found, param \"photo\" with not-found — a file there is nil, never not-found]")))))
 
 (deftest param-never-trims-never-coerces-and-reads-string-keys-only
   (doseq [[value expected] [[" Ada " [" Ada " " Ada " nil nil nil]] ["Ada\r\n" ["Ada\r\n" "Ada\r\n" nil nil nil]]

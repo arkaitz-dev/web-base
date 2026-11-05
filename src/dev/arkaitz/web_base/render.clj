@@ -65,6 +65,7 @@
               document (cond->> (html markup)
                          (and page? (= height total)) (str doctype))
               headers  (:headers response {})]
+          (when rotates? (security/check-rotated-render request document))
           (-> (strip response)
               (assoc :body document)
               (assoc :headers

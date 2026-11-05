@@ -24,6 +24,29 @@
   [{:keys [content request]}]
   [:main content [:form (security/csrf-field request)]])
 
+(defn- with-lazy-form
+  "`with-form` with its field built lazily, from the rotated request the layout is
+  given — so the page carries only the fresh token, which no check may mistake for a
+  stale one."
+  [{:keys [content request]}]
+  [:main content [:form (for [_ [1]] (security/csrf-field request))]])
+
+(def ^:private lazy-read-after-minting
+  "Whether the last lazy read below ran after `rotate-token` had minted the new
+  session's token — the witness that the read really was lazy."
+  (atom nil))
+
+(defn- lazy-login
+  "A login whose content reads the pre-rotation token lazily: realised only as the page
+  is rendered, after `rotate-token` has looked."
+  [r]
+  (session/rotate {:status 200
+                   :body   [:p (for [_ [1]]
+                                 (do (reset! lazy-read-after-minting
+                                             (some? (some-> (::security/csrf-fresh r) deref)))
+                                     (security/csrf-field r)))]}
+                  (assoc (:session r) :user "ann")))
+
 (defn- app [sessions]
   (wb/handler
    {:session {:store (memory/memory-store sessions)}
@@ -39,7 +62,13 @@
               ["/login-content" {:wb/layouts [with-form]
                                  :post (fn [r] (session/rotate {:status 200 :body [:p (security/csrf-field r)]}
                                                                (assoc (:session r) :user "ann")))}]
-              ;; The same two logins under a path carrying a secret the route hides, as a
+              ["/login-lazy" {:wb/layouts [with-form] :post lazy-login}]
+              ["/login-plain" {:post (fn [r] (session/rotate {:status 200 :body [:p "welcome"]}
+                                                             (assoc (:session r) :user "ann")))}]
+              ["/login-lazy-layout" {:wb/layouts [with-lazy-form]
+                                     :post (fn [r] (session/rotate {:status 200 :body [:p "welcome"]}
+                                                                   (assoc (:session r) :user "ann")))}]
+              ;; The same three logins under a path carrying a secret the route hides, as a
               ;; magic link's redemption would.
               ["/redeem-string/:token" {:wb/log-path :template
                                         :post (fn [r] (session/rotate {:status 200
@@ -48,6 +77,7 @@
               ["/redeem-content/:token" {:wb/log-path :template :wb/layouts [with-form]
                                          :post (fn [r] (session/rotate {:status 200 :body [:p (security/csrf-field r)]}
                                                                        (assoc (:session r) :user "ann")))}]
+              ["/redeem-lazy/:token" {:wb/log-path :template :wb/layouts [with-form] :post lazy-login}]
               ["/post" {:post (fn [_] {:status 200 :body "posted"})}]]}))
 
 (defn- sid [response] (get (testing/cookies response) "ring-session"))
@@ -112,15 +142,81 @@
         (is (and (some? stored) (not= old stored)) "the new session holds a fresh token, not the one the page showed")
         (is (= 403 (post handler new-sid old "/post")) "so the page's form is refused, loudly logged rather than silent")))))
 
-(deftest content-that-read-the-token-before-rotating-is-logged-by-name
+(def ^:private read-before-message "a response that rotates the session read its CSRF token")
+
+(defn- errors [] (filter #(#{:warn :error} (:level %)) (lt/the-log)))
+
+(defn- named-once?
+  "Exactly one error in the log, and it is the read-before-rotation one: a second, or
+  the other rotation message, is a different defect."
+  []
+  (let [es (errors)]
+    (and (= 1 (count es)) (str/starts-with? (str (:message (first es))) read-before-message))))
+
+(deftest content-that-read-the-token-before-rotating-is-logged-by-name-once
   (let [[handler _ old-sid old] (signed-in-page)]
     (lt/with-log
       (handler (-> (mock/request :post "/login-content")
                    (mock/header "Cookie" (str "ring-session=" old-sid))
                    (mock/header "X-CSRF-Token" old)))
-      (is (some #(str/starts-with? (str (:message %)) "a response that rotates the session read its CSRF token")
-                (lt/the-log))
-          (str "named in the log: " (mapv :message (lt/the-log)))))))
+      (is (named-once?) (str "named once in the log: " (mapv :message (errors)))))))
+
+(deftest lazy-content-that-read-the-pre-rotation-token-is-logged-by-name-once
+  (let [[handler sessions old-sid old] (signed-in-page)]
+    (reset! lazy-read-after-minting nil)
+    (lt/with-log
+      (let [response (handler (-> (mock/request :post "/login-lazy")
+                                  (mock/header "Cookie" (str "ring-session=" old-sid))
+                                  (mock/header "X-CSRF-Token" old)))
+            new-sid  (sid response)
+            stored   (get-in @sessions [new-sid token-key])]
+        (is (= 200 (:status response)) "witness: the login answered with a page")
+        (is (and (some? new-sid) (not= old-sid new-sid)) "witness: and rotated the session id")
+        (is (true? @lazy-read-after-minting) "witness: the content read the token lazily, after the new one was minted")
+        (is (str/includes? (:body response) old) "witness: the page shows the pre-rotation token")
+        (is (and (some? stored) (not= old stored)) "witness: the rotated session holds a token of its own")
+        (is (= 403 (post handler new-sid old "/post")) "so the form built with the old token is refused")
+        (is (= 200 (post handler new-sid stored "/post")) "while the session's own token still posts")
+        (is (named-once?) (str "and that is named once in the log: " (mapv :message (errors))))))))
+
+(deftest a-lazy-read-in-an-htmx-login-fragment-is-logged-by-name-once
+  (let [[handler _ old-sid old] (signed-in-page)]
+    (reset! lazy-read-after-minting nil)
+    (lt/with-log
+      (let [response (handler (-> (mock/request :post "/login-lazy")
+                                  (mock/header "Cookie" (str "ring-session=" old-sid))
+                                  (mock/header "X-CSRF-Token" old)
+                                  (mock/header "HX-Request" "true")))]
+        (is (= "true" (get-in response [:headers "HX-Refresh"])) "witness: answered as a fragment that rotated")
+        (is (true? @lazy-read-after-minting) "witness: the content read the token lazily, after the new one was minted")
+        (is (str/includes? (:body response) old) "witness: the fragment shows the pre-rotation token")
+        (is (named-once?) (str "and that is named once in the log: " (mapv :message (errors))))))))
+
+(deftest rotating-content-that-renders-only-the-fresh-token-logs-nothing
+  (let [[handler sessions old-sid old] (signed-in-page)]
+    (lt/with-log
+      (let [response (handler (-> (mock/request :post "/login-lazy-layout")
+                                  (mock/header "Cookie" (str "ring-session=" old-sid))
+                                  (mock/header "X-CSRF-Token" old)))
+            stored   (get-in @sessions [(sid response) token-key])]
+        (is (some? stored) "witness: the rotated session holds a token")
+        (is (str/includes? (:body response) stored) "witness: the lazy layout rendered that token")
+        (is (not (str/includes? (:body response) old)) "witness: and not the pre-rotation one")
+        (is (= 200 (post handler (sid response) stored "/post")) "so the page's form posts")
+        (is (empty? (errors)) (str "and nothing is logged: " (mapv :message (errors))))))
+    (let [[handler sessions old-sid old] (signed-in-page)]
+      (lt/with-log
+        (let [response (handler (-> (mock/request :post "/login-plain")
+                                    (mock/header "Cookie" (str "ring-session=" old-sid))
+                                    (mock/header "X-CSRF-Token" old)))
+              new-sid  (sid response)]
+          (is (= [200 "ann"] [(:status response) (get-in @sessions [new-sid :user])])
+              "witness: a rotating page that renders no token at all")
+          (is (and (some? new-sid) (not= old-sid new-sid)) "witness: and it rotated")
+          (is (empty? (errors)) (str "logs nothing either: " (mapv :message (errors)))))))
+    (lt/with-log
+      (handler (-> (mock/request :get "/form") (mock/header "Cookie" (str "ring-session=" old-sid))))
+      (is (empty? (errors)) (str "control: a page that rotates nothing logs nothing: " (mapv :message (errors)))))))
 
 (deftest an-htmx-login-fragment-asks-for-a-full-reload-to-carry-the-new-token
   ;; The page around a fragment keeps the pre-login token in `<body>`'s hx-headers;
@@ -143,7 +239,8 @@
 
 (deftest the-rotation-errors-show-a-marked-routes-template-and-never-its-secret
   (doseq [[path message] [["/redeem-string/SECRET-TOKEN" "a response that rotates the session rendered a CSRF token"]
-                          ["/redeem-content/SECRET-TOKEN" "a response that rotates the session read its CSRF token"]]]
+                          ["/redeem-content/SECRET-TOKEN" read-before-message]
+                          ["/redeem-lazy/SECRET-TOKEN" read-before-message]]]
     (let [[handler _ old-sid old] (signed-in-page)]
       (lt/with-log
         (handler (-> (mock/request :post path)
@@ -154,4 +251,6 @@
           (is (str/includes? (str (:message error)) (str/replace path "SECRET-TOKEN" ":token"))
               (str path ": its datum names the route by its template: " (:message error)))
           (is (not (str/includes? (pr-str (mapv :message (lt/the-log))) "SECRET-TOKEN"))
-              (str path ": and no line carries the secret: " (mapv :message (lt/the-log)))))))))
+              (str path ": and no line carries the secret: " (mapv :message (lt/the-log))))
+          (is (not (str/includes? (pr-str (mapv :message (lt/the-log))) old))
+              (str path ": nor the CSRF token: " (mapv :message (lt/the-log)))))))))

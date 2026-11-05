@@ -306,22 +306,39 @@
             response (protected (assoc request ::csrf-used used ::csrf-fresh (volatile! nil)))]
         (cond-> response @used private)))))
 
+(defn- log-pre-rotation-read! [request]
+  (log/error (str "a response that rotates the session read its CSRF token before the base"
+                  " rendered it — the form built with it will be refused; read it in a layout,"
+                  " or redirect")
+             {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
+
 (defn rotate-token
   "`request` carrying a fresh CSRF token for a response that rotates the session, and
   the token recorded so the rotated session keeps exactly it. The render step calls it
   before turning such a response into HTML, so a login page's forms carry the token its
   new session holds. The request unchanged when it went through no CSRF, or carries no
   token. A token read before this — a handler whose own content called `csrf-field` —
-  cannot follow the rotation, and is logged by name."
+  cannot follow the rotation, and is logged by name: here when it was read already, by
+  `check-rotated-render` when lazy content reads it only as the page is rendered."
   [request]
   (if-let [minted (and (:anti-forgery-token request) (::csrf-fresh request))]
-    (do (when (some-> (::csrf-used request) deref)
-          (log/error (str "a response that rotates the session read its CSRF token before the base"
-                          " rendered it — the form built with it will be refused; read it in a layout,"
-                          " or redirect")
-                     {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
-        (assoc request :anti-forgery-token (or @minted (vreset! minted (fresh-token)))))
+    (let [read? (some-> (::csrf-used request) deref)]
+      (when read? (log-pre-rotation-read! request))
+      (cond-> (assoc request :anti-forgery-token (or @minted (vreset! minted (fresh-token))))
+        (not read?) (assoc ::pre-rotation-token (:anti-forgery-token request))))
     request))
+
+(defn check-rotated-render
+  "Logs, as `rotate-token` does, a document rendered for `request` — the one
+  `rotate-token` returned — that carries the token from before the rotation: content
+  built lazily by the handler reads the request it closed over, and only once the page
+  is turned into HTML, after `rotate-token` looked. It finds the token as a form or an
+  attribute writes it; one re-encoded on its way into the page, inside a script's JSON
+  say, goes unseen."
+  [request document]
+  (when-let [stale (not-empty (::pre-rotation-token request))]
+    (when (str/includes? document stale)
+      (log-pre-rotation-read! request))))
 
 (def csrf-header "X-CSRF-Token")
 

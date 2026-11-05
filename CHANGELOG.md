@@ -24,6 +24,10 @@ From what building `shop`, a fifth application, cost (its `FRICTION.md`).
   cannot run — UTF-8 with a byte order mark, every field quoted, CRLF, and a field
   beginning with one of OWASP's CSV-injection characters (the full-width forms and the
   line feed included) prefixed with an apostrophe.
+- Fixed: content built lazily (a `for` in the body) that read the CSRF token of a
+  response rotating the session read it only as the page was rendered, after the check,
+  so the form carrying the pre-rotation token was refused with nothing logged. It is now
+  logged by name, as an eager read was.
 
 ## 0.17.0 — 2026-10-09
 

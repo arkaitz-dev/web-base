@@ -278,6 +278,20 @@
           (some-> (::csrf-used request) deref) (strategy/write-token inner request response token)
           :else                                response)))))
 
+(defn- request-token
+  "ring-anti-forgery's own reading — the form field, multipart included, else the
+  `X-CSRF-Token` or `X-XSRF-Token` header — except that a field that is not one string
+  is no token at all. Sent twice it arrives as a vector, which the library's comparison
+  throws on: a 500, written to the error log, from any anonymous POST. A field present
+  in any shape is never passed over for a header, so the token is the one the form sent."
+  [request]
+  (let [fields (merge (:form-params request) (:multipart-params request))]
+    (if (contains? fields "__anti-forgery-token")
+      (let [field (get fields "__anti-forgery-token")]
+        (when (string? field) field))
+      (or (get-in request [:headers "x-csrf-token"])
+          (get-in request [:headers "x-xsrf-token"])))))
+
 (defn wrap-csrf
   "ring-anti-forgery inside the session: every request not GET/HEAD/OPTIONS
   needs the session's token, read from the `__anti-forgery-token` form field
@@ -297,6 +311,7 @@
   (let [protected (anti-forgery/wrap-anti-forgery
                    handler
                    {:error-handler (fn [request] (render-error {:status 403} request))
+                    :read-token    request-token
                     :strategy      (lazy-session-strategy)})]
     ;; A flag of this request's own: one made when the middleware was built would be
     ;; shared by every request after the first that used a token.

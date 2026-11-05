@@ -24,6 +24,11 @@ From what building `shop`, a fifth application, cost (its `FRICTION.md`).
   cannot run — UTF-8 with a byte order mark, every field quoted, CRLF, and a field
   beginning with one of OWASP's CSV-injection characters (the full-width forms and the
   line feed included) prefixed with an apostrophe.
+- `dev.arkaitz.web-base.paging`: `paged` and `path`, a list in numbered pages. A
+  well-formed `page` past the last answers a 303 to the last page with the rest of the
+  query kept, where the shop answered a 404 — its staff landed on that 404 after moving
+  the last order of a filtered page, since htmx reloads the page it is on. Junk, zero, a
+  leading zero or a repeated `page` is a 404. No SQL and no markup.
 - Fixed: content built lazily (a `for` in the body) that read the CSRF token of a
   response rotating the session read it only as the page was rendered, after the check,
   so the form carrying the pre-rotation token was refused with nothing logged. It is now

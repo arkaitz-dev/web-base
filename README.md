@@ -494,6 +494,21 @@ before it, so the user's text arrives as text: that is any field starting with `
 `-`, `@`, a tab, a carriage return, a line feed, or a full-width `＝＋－＠`, OWASP's CSV
 injection list. `csv/write` gives the bytes alone.
 
+A list in numbered pages (since 0.18.0, namespace `dev.arkaitz.web-base.paging`): count
+the rows, then let `paging/paged` pick the page the query's `page` asks for —
+
+```clojure
+(paging/paged request (orders/total ds status) 20
+  (fn [{:keys [page pages offset limit]}]
+    (response/ok (views/orders request (orders/page ds status offset limit) page pages))))
+```
+
+A well-formed `page` past the last answers a 303 to the last page with the rest of the
+query kept — the last row of a filtered list moved away, by you or a colleague, and the
+page you were on is gone, not broken. Junk, zero, a leading zero or `page` sent twice is a
+404. `(paging/path request n)` is page `n` of the same list for the pager's links, page 1
+spelt without `page`. The statement and the pager's words stay yours.
+
 `:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
 other fields included — so it is your files plus the form's other fields, and a field
 added to the form takes a file away from the limit unless you raise it; `:max-body-bytes` bounds the whole body, and without it the route

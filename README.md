@@ -659,13 +659,17 @@ the last page that had one, 301/302/303 followed as a GET up to ten times, and `
 browser puts them: the query string for a GET and for htmx's DELETE, a form body for a
 POST, PUT or PATCH. A POST carries the token as its hidden field; `{:htmx? true}` sends it
 as the header with the headers of a swap, and leaves an `HX-Redirect` for the test to
-read. A PUT, PATCH or DELETE needs `{:htmx? true}`, since no browser form sends one. Each
+read; `{:fetch? true}` (since 0.22.0) sends it as the header alone, as a page's script
+does with `fetch` and `security/csrf-meta`, so the answer is the whole page. A PUT, PATCH
+or DELETE needs one of the two, since no browser form sends one. Each
 also sends `Sec-Fetch-Site: same-origin` and `Origin: http://localhost` (since 0.21.0), as
 a browser does from the site's own page — what an anonymous session is checked by; a test
 of a refusal overrides them with `:headers`. After a sign-in the session holds a token
 the browser has not seen yet: GET a page before the next POST.
 `{:files {"photo" {:filename "a.png" :content-type "image/png" :bytes b}}}` sends the
-form as `multipart/form-data`, the CSRF field among its parts, as a browser does.
+form as `multipart/form-data`, the CSRF field among its parts, as a browser does — a
+name's `"`, CR and LF as `%22`, `%0D` and `%0A` (since 0.22.0), so a test can upload the
+hostile file name a browser would.
 `{:follow? false}` sends one request and follows nothing, for a test that asks *who*
 answered — a handler that redirects to a gated page lands on the login page exactly as
 the gate would — and the jar still takes what that response set.

@@ -146,8 +146,8 @@
       (str uri "?" query))
     path))
 
-(def ^:private htmx-only?
-  "The methods only htmx sends: a browser form knows GET and POST."
+(def ^:private script-only?
+  "The methods only a script sends — htmx, or a `fetch`: a browser form knows GET and POST."
   #{:put :patch :delete})
 
 (def ^:private owned-headers
@@ -160,7 +160,8 @@
   "`headers` with lower-cased names, refused naming the first one `who` owns, or the
   first name, in sort order, given twice in different cases — which spelling a map kept
   would be chance."
-  ([path headers] (extra-headers "visit" owned-headers "pass the jar, the token or {:htmx? true} instead of setting it"
+  ([path headers] (extra-headers "visit" owned-headers
+                                 "pass the jar, the token, {:htmx? true} or {:fetch? true} instead of setting it"
                                  path headers))
   ([who owned instead path headers]
    (let [lowered (into {} (map (fn [[k v]] [(lower (name k)) v])) headers)]
@@ -175,16 +176,24 @@
 
 (def ^:private boundary "wb-test-boundary-7MA4YWxkTrZu0gW")
 
+(defn- quoted
+  "A field's or a file's name as a browser writes it into a part's header, WHATWG's
+  multipart encoding: `\"`, CR and LF as `%22`, `%0D` and `%0A`, everything else as it
+  is. Written raw, a quote ends the name early and a line break ends the header."
+  [s]
+  (-> (str s) (str/replace "\"" "%22") (str/replace "\r" "%0D") (str/replace "\n" "%0A")))
+
 (defn- multipart-body
   "The bytes of a `multipart/form-data` body with `fields` (name → string) and `files`
-  (name → `{:filename :content-type :bytes}`), as a browser's form sends them."
+  (name → `{:filename :content-type :bytes}`), as a browser's form sends them, names
+  encoded as a browser encodes them (since 0.22.0)."
   ^bytes [fields files]
   (let [out  (java.io.ByteArrayOutputStream.)
         text (fn [^String s] (.write out (.getBytes s "UTF-8")))]
     (doseq [[k v] fields]
-      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (name k) "\"\r\n\r\n" v "\r\n")))
+      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (quoted (name k)) "\"\r\n\r\n" v "\r\n")))
     (doseq [[k {:keys [filename content-type bytes]}] files]
-      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (name k) "\"; filename=\"" filename "\"\r\n"
+      (text (str "--" boundary "\r\nContent-Disposition: form-data; name=\"" (quoted (name k)) "\"; filename=\"" (quoted filename) "\"\r\n"
                  "Content-Type: " (or content-type "application/octet-stream") "\r\n\r\n"))
       (.write out ^bytes bytes)
       (text "\r\n"))
@@ -192,11 +201,11 @@
     (.toByteArray out)))
 
 (defn- request-of
-  [{:keys [jar token]} method path params {:keys [htmx? remote-addr headers files multipart?]}]
+  [{:keys [jar token]} method path params {:keys [htmx? fetch? remote-addr headers files multipart?]}]
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
         fields   (when (and (unsafe? method) (not (params-in-query? method)))
-                   (cond-> (vec params) (and token (not htmx?)) (conj ["__anti-forgery-token" token])))
+                   (cond-> (vec params) (and token (not htmx?) (not fetch?)) (conj ["__anti-forgery-token" token])))
         [bytes type] (cond (and fields (or (seq files) multipart?))
                            [(multipart-body fields files) (str "multipart/form-data; boundary=" boundary)]
                            fields
@@ -214,7 +223,7 @@
                                             (assoc headers "host" "localhost"))
                                cookie (assoc "cookie" cookie)
                                htmx?  (merge htmx/fragment-headers)
-                               (and htmx? token) (assoc (lower security/csrf-header) token))}
+                               (and (or htmx? fetch?) token) (assoc (lower security/csrf-header) token))}
       qs    (assoc :query-string qs)
       bytes (-> (assoc :body (java.io.ByteArrayInputStream. bytes)
                        :content-length (alength ^bytes bytes)
@@ -299,12 +308,17 @@
   - A POST, PUT, PATCH or DELETE carries the CSRF token of the last page that had one,
     as the hidden field a form would send — or, with `{:htmx? true}`, as the header the
     shell makes htmx send, with the headers of a swap. A PUT, PATCH or DELETE without
-    `{:htmx? true}` throws, because no browser form can send one. Every one also sends
+    `{:htmx? true}` or `{:fetch? true}` throws, because no browser form can send one. Every one also sends
     `Sec-Fetch-Site: same-origin` and `Origin: http://localhost`, as a browser does from
     the site's own page: an anonymous session holds no token and is checked by those
     (since 0.21.0), and a test of a refusal overrides them through `:headers`. After a
     login the session holds a token the browser has not seen — GET a page before the
     next one.
+  - `{:fetch? true}` sends it as a page's own script does with `fetch` (since 0.22.0):
+    the token as the CSRF header — what `security/csrf-meta` hands the script — and
+    neither a form field nor htmx's headers, so the answer is a whole page unless the
+    handler says otherwise. PUT, PATCH and DELETE are a script's too; their params go
+    where htmx puts them. It cannot be combined with `{:htmx? true}`.
   - A 301, 302 or 303 is followed as a GET through the same jar, up to ten times; an
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
@@ -334,9 +348,13 @@
   ([b method path] (visit b method path nil nil))
   ([b method path params] (visit b method path params nil))
   ([b method path params opts]
-   (when (and (htmx-only? method) (not (:htmx? opts)))
+   (when (and (:htmx? opts) (:fetch? opts))
+     (throw (ex-info (str "web-base: a request to " path " is sent by htmx or by a fetch, not both — pass one of"
+                          " {:htmx? true} and {:fetch? true}")
+                     {:path path :method method})))
+   (when (and (script-only? method) (not (or (:htmx? opts) (:fetch? opts))))
      (throw (ex-info (str "web-base: a browser form sends only GET and POST — a "
-                          (.toUpperCase (name method) Locale/ROOT) " to " path " is htmx's; pass {:htmx? true}")
+                          (.toUpperCase (name method) Locale/ROOT) " to " path " is a script's; pass {:htmx? true} or {:fetch? true}")
                      {:path path :method method})))
    (when (and (or (seq (:files opts)) (:multipart? opts)) (not (#{:post :put :patch} method)))
      (throw (ex-info (str "web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a "

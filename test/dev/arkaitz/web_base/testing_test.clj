@@ -428,7 +428,7 @@
       (let [e (try (testing/visit b method "/echo" {:x "1"}) nil
                    (catch clojure.lang.ExceptionInfo e e))
             m ({:put "PUT" :patch "PATCH" :delete "DELETE"} method)]
-        (is (= [(str "web-base: a browser form sends only GET and POST — a " m " to /echo is htmx's; pass {:htmx? true}")
+        (is (= [(str "web-base: a browser form sends only GET and POST — a " m " to /echo is a script's; pass {:htmx? true} or {:fetch? true}")
                 {:path "/echo" :method method}]
                [(ex-message e) (ex-data e)])
             (str method " without htmx throws: no browser form can send it"))
@@ -493,8 +493,8 @@
                   (let [e (try (testing/visit b method "/echo" {:x "1"} (assoc opts :headers headers)) nil
                                (catch clojure.lang.ExceptionInfo e e))]
                     [(ex-message e) (ex-data e) (count @log)]))
-        expected (fn [h] [(str "web-base: visit writes the " h " header itself — pass the jar, the token or"
-                               " {:htmx? true} instead of setting it")
+        expected (fn [h] [(str "web-base: visit writes the " h " header itself — pass the jar, the token,"
+                               " {:htmx? true} or {:fetch? true} instead of setting it")
                           {:path "/echo" :header h} 0])
         b (signed-in app)]
     (is (= owned (into #{"host" "cookie" "content-type" "content-length" (str/lower-case security/csrf-header)}

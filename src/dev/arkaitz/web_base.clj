@@ -731,13 +731,27 @@
   `dev.arkaitz.web-base.plugin` — what `handler` builds from, to read at the REPL."
   plugin/expand)
 
+(defn- fields
+  "The fields `param` reads. The methods CSRF lets through unchecked — GET, HEAD,
+  OPTIONS — read Ring's `:params`, which for a browser is the query. Anything else reads
+  its body over its query: Ring's `:params` lets the query win on a urlencoded form and
+  the body win on a multipart one, so adding a file input to a form changed which value
+  a handler saw. The query still fills in what the body lacks, which is where htmx puts a
+  DELETE's fields."
+  [request]
+  (if (#{:get :head :options} (:request-method request))
+    (:params request)
+    (merge (:params request) (:form-params request) (:multipart-params request))))
+
 (defn param
-  "Parameter `k` — the field's name, a string, as the stack keys `:params` — when it is
-  one string, and nil otherwise: absent, sent twice (Ring reads a repeated field as a
-  vector, whose printed form is no value of the field) or a file. A query, form or
-  multipart field alike. It never trims and never coerces. A multi-select reads
-  `(get-in request [:params k])` itself: a string for one choice, a vector for several,
-  nil for none.
+  "Field `k` — its name, a string, as the stack keys `:params` — when it is one string,
+  and nil otherwise: absent, sent twice in the same part of the request (Ring reads that
+  as a vector, whose printed form is no value of the field) or a file. On a GET, HEAD or
+  OPTIONS the field is Ring's `:params` — the query, as a browser sends them; on any
+  other method the body's, urlencoded or multipart alike, and the query's only when the
+  body does not carry it (since 0.20.0). It never
+  trims and never coerces. A multi-select reads `(get-in request [:params k])` itself: a
+  string for one choice, a vector for several, nil for none — in Ring's own order.
 
   With `not-found` (since 0.19.0), an absent field answers `not-found` and every other
   shape answers as above, so a host tells \"not sent\" from \"sent wrong\" — an optional
@@ -745,9 +759,9 @@
   the status itself."
   ([request k] (param request k nil))
   ([request k not-found]
-   (let [params (:params request)]
-     (if (contains? params k)
-       (let [v (get params k)] (when (string? v) v))
+   (let [fields (fields request)]
+     (if (contains? fields k)
+       (let [v (get fields k)] (when (string? v) v))
        not-found))))
 
 (defn- file-name

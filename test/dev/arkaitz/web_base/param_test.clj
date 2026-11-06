@@ -33,13 +33,23 @@
   {:status 200
    :body   (pr-str [(wb/param r "who" ::absent) (wb/param r "photo" ::absent)])})
 
+(defn- echo-precedence
+  "Ring's raw value beside what `param` reads, for a field the query and the body may
+  both carry, and for one only the query carries."
+  [r]
+  {:status 200
+   :body   (pr-str [(get-in r [:params "who"]) (wb/param r "who") (wb/param r :who)
+                    (wb/param r "who" ::absent) (wb/param r "page" ::absent)])})
+
 (def ^:private app
   (wb/handler {:session {:key KEY}
                :routes  [["/form" {:get (fn [r] (response/ok [:form (security/csrf-field r)]))}]
                          ["/p" {:get echo :post echo}]
                          ["/m" {:wb/multipart {:max-file-size 1024} :post echo}]
                          ["/n" {:get echo-not-found :post echo-not-found}]
-                         ["/nm" {:wb/multipart {:max-file-size 1024} :post echo-not-found}]]}))
+                         ["/nm" {:wb/multipart {:max-file-size 1024} :post echo-not-found}]
+                         ["/q" {:get echo-precedence :post echo-precedence}]
+                         ["/qm" {:wb/multipart {:max-file-size 1024} :post echo-precedence}]]}))
 
 (def ^:private photo {"photo" {:filename "a.png" :content-type "image/png" :bytes (.getBytes "PNG" "UTF-8")}})
 
@@ -81,6 +91,33 @@
         (is (= 200 status) "witness: the request reached the handler")
         (is (= [who-nf photo-nf] observation)
             "[param \"who\" with not-found, param \"photo\" with not-found — a file there is nil, never not-found]")))))
+
+(deftest param-on-an-unsafe-method-reads-the-body-over-the-query-and-the-query-for-what-the-body-lacks
+  (doseq [[label method path params opts expected]
+          [["urlencoded POST, the same field in query and body" :post "/q?who=evil" [["who" "good"]] {}
+            ["evil" "good" nil "good" ::absent]]
+           ["multipart POST, the same field in query and body" :post "/qm?who=evil&page=2" [["who" "good"]] {:files photo}
+            ["good" "good" nil "good" "2"]]
+           ["urlencoded POST, a field only the query carries" :post "/q?page=2" [["who" "good"]] {}
+            ["good" "good" nil "good" "2"]]
+           ["GET, the query" :get "/q?who=a" [] {}
+            ["a" "a" nil "a" ::absent]]
+           ["urlencoded POST, a field sent twice in the body" :post "/q?who=evil" [["who" "a"] ["who" "b"]] {}
+            ["evil" nil nil nil ::absent]]
+           ["urlencoded POST, absent everywhere" :post "/q" [] {}
+            [nil nil nil ::absent ::absent]]]]
+    (testing label
+      (let [[status observation] (observed method path params opts)]
+        (is (= 200 status) "witness: the request reached the handler, CSRF passed")
+        (is (= expected observation)
+            "[Ring's raw value, param \"who\", param :who, param \"who\" with not-found, param \"page\" with not-found]"))))
+  (testing "the method decides, not the shape of the request"
+    (let [request {:params {"who" "query"} :form-params {"who" "body"}}]
+      (is (= ["query" "query" "query" "body" "body" "body" "body"]
+             (mapv #(wb/param (assoc request :request-method %) "who") [:get :head :options :post :put :patch :delete]))
+          "the methods CSRF lets through take Ring's :params; every other method the body")
+      (is (= "query" (wb/param {:request-method :post :params {"who" "query"}} "who"))
+          "a POST with no body field reads the query"))))
 
 (deftest param-never-trims-never-coerces-and-reads-string-keys-only
   (doseq [[value expected] [[" Ada " [" Ada " " Ada " nil nil nil]] ["Ada\r\n" ["Ada\r\n" "Ada\r\n" nil nil nil]]

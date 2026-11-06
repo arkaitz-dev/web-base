@@ -53,6 +53,8 @@
             [ring.middleware.params :as params]
             [ring.util.request :as req])
   (:import [java.io File]
+           [java.time Instant]
+           [java.time.format DateTimeFormatter]
            [java.util Locale]
            [org.apache.commons.fileupload2.core FileUploadException]))
 
@@ -455,8 +457,27 @@
           (not-modified/not-modified-response response request)
           response)))))
 
+(def ^:private clamped-until
+  "The last instant a clamping build writes: Nix and Jib set 1970, Buildpacks and zip
+  1980-01-01. A real file's time is never this old."
+  (Instant/parse "1980-01-02T00:00:00Z"))
+
+(defn- dated
+  "`handler`'s answers without a `Last-Modified` at or before `clamped-until`. Such a date
+  says nothing about the bytes — every build writes the same one — and with it
+  `unchanged-exactly` would keep a changed file for good; without it every load is the
+  file. Do not clamp a jar's or an image's file times: a clamp to any other constant is
+  a date this cannot tell from a real one."
+  [handler]
+  (fn [request]
+    (when-let [response (handler request)]
+      (let [date (get-in response [:headers "Last-Modified"])]
+        (if (and date (not (.isAfter (Instant/from (.parse DateTimeFormatter/RFC_1123_DATE_TIME date)) clamped-until)))
+          (update response :headers dissoc "Last-Modified")
+          response)))))
+
 (defn- asset-handler [options]
-  (revalidated (unchanged-exactly (ring/create-resource-handler options))))
+  (revalidated (unchanged-exactly (dated (ring/create-resource-handler options)))))
 
 (defn- with-assets
   "Assets first — the base's `/wb/` before any other, so nothing can shadow the base's

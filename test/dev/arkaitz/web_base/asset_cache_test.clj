@@ -4,12 +4,14 @@
   keeps an asset for a tenth of its age without asking, and served the previous deploy's
   stylesheet after one (2026-11-05). And a 304 needs the very date the file carries: a
   later one is a rollback, whose older file must reach the browser."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [dev.arkaitz.web-base :as wb]
             [ring.middleware.session.memory :as memory]
             [ring.mock.request :as mock])
-  (:import [java.time ZoneOffset ZonedDateTime]
+  (:import [java.io File]
+           [java.time Instant ZoneOffset ZonedDateTime]
            [java.time.format DateTimeFormatter]
            [java.util Locale]))
 
@@ -77,3 +79,40 @@
     (is (= {:status 200 :headers {"Cache-Control" "no-cache"}} ((revalidated (constantly {:status 200})) {}))
         "none of its own: no-cache")
     (is (nil? ((revalidated (constantly nil)) {})) "no answer stays no answer, so the next route is tried")))
+
+(defn- http-date
+  "`millis` as an HTTP date, the day in two digits as RFC 9110 spells it — Java's
+  RFC_1123 formatter writes one digit for days below ten."
+  [millis]
+  (.format (DateTimeFormatter/ofPattern "EEE, dd MMM yyyy HH:mm:ss 'GMT'" Locale/ROOT)
+           (.atZone (Instant/ofEpochMilli millis) ZoneOffset/UTC)))
+
+(deftest an-asset-dated-by-a-clamping-build-carries-no-last-modified-and-is-never-a-304
+  (let [^File f (io/file (io/resource "public/clamped.txt"))
+        before  (.lastModified f)]
+    (try
+      (doseq [[label millis kept?] [["1970" 0 false]
+                                    ["1980-01-01" 315532800000 false]
+                                    ["1980-01-02, the floor itself" 315619200000 false]
+                                    ["a second after the floor" 315619201000 true]
+                                    ["1980-01-03" 315705600000 true]]
+              path ["/h/clamped.txt" "/clamped.txt"]]
+        (is (and (.setLastModified f millis) (= millis (.lastModified f)))
+            (str label ": witness: the file carries the date the test set"))
+        (let [r     (app (mock/request :get path))
+              date  (http-date millis)
+              again (app (mock/header (mock/request :get path) "If-Modified-Since" date))]
+          (is (= [200 true "no-cache" (when kept? date)]
+                 [(:status r) (str/starts-with? (str (body r)) "CLAMPED") (get-in r [:headers "Cache-Control"])
+                  (get-in r [:headers "Last-Modified"])])
+              (str path ", " label ": " (if kept? "its date is served" "a clamped date is no date: none is served")))
+          (is (= (if kept? 304 200) (:status again))
+              (str path ", " label ": that date asked back " (if kept? "is a 304" "is the file, never a 304")))))
+      (finally
+        (is (.setLastModified f before) "the fixture's date is put back")))))
+
+(deftest dated-passes-no-answer-and-an-undated-answer-through
+  (let [dated @#'wb/dated]
+    (is (nil? ((dated (constantly nil)) {})) "no answer stays no answer, so the next route is tried")
+    (is (= {:status 200 :headers {"X" "y"}} ((dated (constantly {:status 200 :headers {"X" "y"}})) {}))
+        "an answer with no date is left as it is")))

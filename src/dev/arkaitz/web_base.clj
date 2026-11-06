@@ -432,7 +432,7 @@
   "`handler`'s answers marked `Cache-Control: no-cache` unless it set its own. With only
   `Last-Modified` a browser keeps an asset for a tenth of its age without asking, and
   served the previous deploy's stylesheet after one (seen 2026-11-05); `no-cache` makes
-  every load ask, and `wrap-not-modified` answers 304 when nothing changed. From a jar,
+  every load ask, and `unchanged-exactly` answers 304 when nothing changed. From a jar,
   `Last-Modified` is the jar file's own time, so each deploy is a change."
   [handler]
   (fn [request]
@@ -441,8 +441,22 @@
         response
         (assoc-in response [:headers "Cache-Control"] "no-cache")))))
 
+(defn- unchanged-exactly
+  "`handler`'s answer as a 304 only when the request's If-Modified-Since is the very date
+  the answer carries, as nginx's `if_modified_since exact` does; any other date is the
+  file. Ring's own `wrap-not-modified` also answers 304 to a later date, so redeploying the
+  previous image — older files, older dates — left every returning browser on the newer
+  ones. A 200 where a 304 would have done costs one download, never the wrong file."
+  [handler]
+  (fn [request]
+    (when-let [response (handler request)]
+      (let [since (get-in request [:headers "if-modified-since"])]
+        (if (and since (= since (get-in response [:headers "Last-Modified"])))
+          (not-modified/not-modified-response response request)
+          response)))))
+
 (defn- asset-handler [options]
-  (revalidated (not-modified/wrap-not-modified (ring/create-resource-handler options))))
+  (revalidated (unchanged-exactly (ring/create-resource-handler options))))
 
 (defn- with-assets
   "Assets first — the base's `/wb/` before any other, so nothing can shadow the base's

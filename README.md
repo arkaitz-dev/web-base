@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.19.0"}
+dev.arkaitz/web-base {:mvn/version "0.20.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -79,8 +79,9 @@ sessions in a row is db-base's: one line each under `:plugins`, shown in their R
 - **Web security**: `nosniff`, `X-Frame-Options`, `Referrer-Policy`, optional
   HSTS, a per-request CSP nonce, CSRF through ring-anti-forgery, opt-in proxy
   headers. Static assets answer before the session, are revalidated on every load
-  (`Cache-Control: no-cache`, since 0.19.0) and answer a conditional GET with `304`, so
-  a deploy's stylesheet reaches a returning browser at once.
+  (`Cache-Control: no-cache`, since 0.19.0) and answer `304` only to their own date
+  (since 0.20.0), so a deploy's stylesheet — or a rollback's — reaches a returning
+  browser at once.
 - **Test helpers** for the host's own suite: the cookies a response set, the
   CSRF token a page carries, a request shaped like an htmx swap.
 - **Lifecycle** as plain `start`/`stop` functions; an optional Integrant
@@ -351,8 +352,8 @@ base's four as well, silently. Three things a host may want there:
   arriving between the 303 and the navigation eats the message. Consume it only
   when `(not (htmx/partial-request? request))`;
 - `ring.middleware.keyword-params/wrap-keyword-params` — note Ring's merged
-  `:params` lets a query-string key shadow a form field; reitit's `:parameters`
-  give typed, keyword access without that.
+  `:params` lets a query-string key shadow a form field — `wb/param` reads the body
+  first on a POST — and reitit's `:parameters` give typed, keyword access without that.
 
 ### Responses
 
@@ -453,7 +454,9 @@ navigation; a host whose fragment costs queries branches on `htmx/partial-reques
 **One field, one string.** `(wb/param request "name")` is the field when it arrived once as
 a string, and nil when it is absent, sent twice or a file. When those must differ — an
 optional filter that means "all" when absent and is refused when sent twice — give it a
-value for absent (since 0.19.0) and choose the answer yourself:
+value for absent (since 0.19.0) and choose the answer yourself. On a GET, HEAD or
+OPTIONS the field is the query's; on any other method the body's, urlencoded or
+multipart alike, and the query's only for what the body does not carry (since 0.20.0):
 
 ```clojure
 (let [typed (wb/param request "status" ::absent)]
@@ -965,14 +968,14 @@ and drop the variable:
 ```
 echo '{"WB_SESSION_KEY" "<base64 of 16 bytes>"}' > env.local.edn
 clojure -M:demo [port]
-clojure -T:build demo-uber && java -jar target/web-base-demo-0.19.0.jar [port]
+clojure -T:build demo-uber && java -jar target/web-base-demo-0.20.0.jar [port]
 ```
 
 ## Development
 
 ```
 clojure -M:test                 # the whole suite, demo included
-clojure -T:build jar            # target/web-base-0.19.0.jar
+clojure -T:build jar            # target/web-base-0.20.0.jar
 clojure -T:build install        # into ~/.m2
 CLOJARS_USERNAME=… CLOJARS_PASSWORD=<deploy token> clojure -T:build deploy
 ```

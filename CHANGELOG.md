@@ -5,6 +5,25 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.20.0 — 2026-11-06
+
+The items 0.19.0 recorded, decided by a panel.
+
+- **Breaking:** on a method other than GET, HEAD or OPTIONS, `wb/param` reads the body
+  over the query. Ring's `:params` let the query win on a urlencoded form and the body
+  on a multipart one, so adding a file input to a form changed which value a handler
+  saw. The query still fills in what the body lacks — a DELETE's fields, a POST's own
+  `?page=2`. A host that posted a field in both places and read the query's now reads
+  the body's; none of ours does. Ring's raw `:params` keeps its own order.
+- Fixed: an asset answered 304 to an If-Modified-Since later than its own date, so
+  redeploying the previous image — older files, older dates — left every returning
+  browser on the newer ones. A 304 now needs the very date the file carries, as nginx's
+  `if_modified_since exact`; any other date is the file, which costs one download, never
+  the wrong one. Different bytes under an identical date — a build that clamps file
+  times — still read as unchanged.
+- Measured, nothing to change: a GraalVM native image gives its assets the build's file
+  times, so they revalidate as a jar's do.
+
 ## 0.19.0 — 2026-11-05
 
 From the two candidates the shop round left open, decided by a panel.

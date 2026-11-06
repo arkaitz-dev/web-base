@@ -533,11 +533,6 @@
                          (asset-handler (merge {:path "/"} static)))
                        app])))
 
-(def ^:private local-href
-  "A path on this origin. A browser reads a backslash as a slash and drops tabs and
-  newlines, so `/\\evil.example/x.css` is `//evil.example/x.css`: another origin's."
-  #"/[^/\\\s\p{Cntrl}][^\\\s\p{Cntrl}]*")
-
 (defn- other-origin?
   "Whether a browser takes `href` to another origin, read as it reads one: spaces and
   controls trimmed from the start, tabs and newlines dropped, a backslash taken for a
@@ -644,7 +639,7 @@
                            " serve files where a page or a probe answers")
                       {:config-key [:assets path]}))))
   (when-not (and (or (nil? stylesheets) (sequential? stylesheets))
-                 (every? #(and (string? %) (re-matches local-href %)) stylesheets))
+                 (every? render/local-path? stylesheets))
     (throw (ex-info (str "web-base: :stylesheets is a vector of local paths, each starting with one /"
                          " and holding no backslash, space or control character — never another origin's")
                     {:config-key [:stylesheets]})))
@@ -691,7 +686,8 @@
     :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
                   inherited by nested routes (layouts concatenate, a child's gate composes with its parent's);
                   `:wb/guard`, a predicate asked after coercion whose no is a 404, composed
-                  as a gate is (since 0.22.0);
+                  as a gate is, and `:wb/scripts`, local script paths the shell loads under
+                  the CSP nonce (both since 0.22.0);
                   `:wb/log-path :template` logs the route's template instead of its path,
                   for a path that carries a secret; `:wb/multipart {:max-file-size n …}`
                   parses a file upload for that route alone

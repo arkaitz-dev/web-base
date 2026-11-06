@@ -378,14 +378,32 @@ written.
 
 A layout is a function of one map of slots: `:content`, `:request`, plus whatever
 the handler put under `:wb/slots`. Nesting is composition. `shell/page` is one
-such layout, with slots `:lang :title :head :header :nav :identity :content
+such layout, with slots `:lang :title :head :scripts :header :nav :identity :content
 :footer`; it links `/wb/wb.css` (structural CSS, every colour a `--wb-*` custom
 property you redefine) and `/wb/htmx.min.js`, and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it — on a page whose
 markup uses htmx (an `hx-…` or `data-hx-…` attribute) or a form (since 0.18.0). Classic
 forms add `(security/csrf-field request)`. Read the token through those two, while the
-handler runs, and never from `:anti-forgery-token` directly. A page that calls htmx only
-from a script reads `csrf-token` itself, into a `meta` of `:head`.
+handler runs, and never from `:anti-forgery-token` directly.
+
+**A page whose script calls the server** (since 0.22.0) — a `fetch`, `htmx.ajax`, a drag
+that saves an order — names its scripts and carries the token where the script reads it:
+
+```clojure
+["/syllabus" {:wb/scripts ["/js/reorder.js"]          ; every page under this route
+              :get (fn [r] (response/ok (view r) {:slots {:head (security/csrf-meta r)}}))}]
+```
+
+`:wb/scripts` (route data, a parent's before a child's) and the shell's `:scripts` slot
+are local paths, each a deferred `<script>` under the request's CSP nonce; another
+origin's, or anything but a path, is refused — at construction for the route's, as a 500
+for the slot's. `(security/csrf-meta request)` is `<meta name="csrf-token" content=…
+data-header="X-CSRF-Token">`, so the script spells neither the token nor the header:
+`headers[m.dataset.header] = m.content`. It is nil for an anonymous visitor, whose
+session holds no token and whose requests CSRF checks by their origin; a script that
+finds no meta sends no header. Reading it marks the token used, as a form does, so the
+shell sends it from `<body>` too. A path here runs under the page's nonce, so it must
+serve the host's own code — never a directory of uploads.
 
 **CSRF has two checks** (since 0.21.0). A token is born only when the session rotates —
 `session/rotate`, at sign-in — and a session holding one needs it on every POST, PUT,

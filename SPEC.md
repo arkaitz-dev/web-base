@@ -701,7 +701,8 @@ this base's product.
   when the rendered body carries an attribute htmx acts on (`hx-…` or `data-hx-…`) or
   its content already read the token for a form. "Every htmx request carries it" above
   therefore means every htmx request from a page whose markup uses htmx. A page that
-  reaches htmx only from a script (`htmx.ajax`, `fetch`) reads `csrf-token` itself. A
+  reaches htmx only from a script (`htmx.ajax`, `fetch`) puts `security/csrf-meta` in its
+  `:head` (since 0.22.0), which reads the token. A
   page with a classic form still costs a row, because its field needs the token; a
   stateless token would remove that too, and is not taken: ring-anti-forgery's signed
   and encrypted strategies bind the token to an identity an anonymous visitor does not

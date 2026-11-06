@@ -23,6 +23,27 @@
 
 (def doctype "<!DOCTYPE html>\n")
 
+(def ^:private local-href
+  "A path on this origin. A browser reads a backslash as a slash and drops tabs and
+  newlines, so `/\\evil.example/x.css` is `//evil.example/x.css`: another origin's."
+  #"/[^/\\\s\p{Cntrl}][^\\\s\p{Cntrl}]*")
+
+(defn local-path?
+  "Whether `href` is a path on this origin, as a browser reads it: one `/`, then no
+  backslash, space or control character. A stylesheet or a script the shell links is
+  one, never another origin's: a script there would run under this page's nonce."
+  [href]
+  (boolean (and (string? href) (re-matches local-href href))))
+
+(defn check-scripts!
+  "Refuses `scripts` unless it is absent or a sequence of `local-path?` strings, naming
+  `config-key`."
+  [scripts config-key]
+  (when-not (and (or (nil? scripts) (sequential? scripts)) (every? local-path? scripts))
+    (throw (ex-info (str "web-base: " (pr-str (peek config-key)) " is a vector of local paths, each starting with one /"
+                         " and holding no backslash, space or control character — never another origin's")
+                    {:config-key config-key :value scripts}))))
+
 (defn- hiccup? [body]
   (or (vector? body) (seq? body)))
 
@@ -79,10 +100,15 @@
 (def middleware
   "reitit middleware. Compiled per route so the layout stack is read from the
   merged route data once; a route without `:wb/layouts` still renders, with an
-  empty stack."
+  empty stack. The route's `:wb/scripts` — local paths, a parent's before a child's —
+  go on the request as `:wb/scripts`, for the shell to load under the request's nonce
+  (since 0.22.0); malformed, they fail at router construction."
   {:name    ::render
-   :compile (fn [{:wb/keys [layouts]} _opts]
-              (let [stack (vec layouts)]
+   :compile (fn [{:wb/keys [layouts scripts]} _opts]
+              (check-scripts! scripts [:wb/scripts])
+              (let [stack   (vec layouts)
+                    scripts (not-empty (vec (distinct scripts)))]
                 (fn [handler]
                   (fn [request]
-                    (response request (handler request) stack)))))})
+                    (let [request (if scripts (assoc request :wb/scripts scripts) (dissoc request :wb/scripts))]
+                      (response request (handler request) stack))))))})

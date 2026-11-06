@@ -1,6 +1,6 @@
 (ns dev.arkaitz.web-base.shell
   "The page shell as a set of slots the host fills (SPEC §13): `:lang`,
-  `:title`, `:head`, `:header`, `:nav`, `:identity`, `:content`, `:footer`.
+  `:title`, `:head`, `:scripts`, `:header`, `:nav`, `:identity`, `:content`, `:footer`.
   It is an ordinary layout — a function of one slot map — usable as the
   outermost entry of a route's `:wb/layouts` or called by the host's own
   layout. Absent slots emit nothing.
@@ -10,8 +10,9 @@
   own and before `:head`; the negotiated locale for `lang` (SPEC §14), the CSP nonce for its own script
   tag and the CSRF token, sent on every htmx request as `X-CSRF-Token`
   through `hx-headers:inherited` on `<body>` (SPEC §15) — htmx 4 inherits
-  nothing without the modifier. A `<script>` the host adds through `:head`
-  needs its own `nonce` attribute, read from `(:wb/nonce request)`.
+  nothing without the modifier. `:scripts` — local paths, after the route's own
+  `:wb/scripts` — is a deferred `<script>` each, under the request's nonce (since
+  0.22.0); a `<script>` the host writes into `:head` itself needs its own `nonce`.
 
   The token goes on `<body>` only when the page uses it: when the rendered body
   carries an htmx attribute (`hx-…` or `data-hx-…`), or when its content already
@@ -20,8 +21,8 @@
   is rendered before that decision, so a form or an htmx attribute inside lazy
   content counts. What it cannot see is htmx reached from a script
   (`htmx.ajax`, `fetch`) on a page with neither, or attributes under a prefix the host
-  configured for htmx in place of `data-hx-`: such a page reads `security/csrf-token`
-  itself, into a `meta` of `:head`."
+  configured for htmx in place of `data-hx-`: such a page puts `security/csrf-meta` in
+  `:head`, which reads the token."
   (:require [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.security :as security]
             [hiccup2.core :as h]))
@@ -47,7 +48,9 @@
     (security/csrf-token request)))
 
 (defn page
-  [{:keys [lang title head header nav content footer request] who :identity}]
+  [{:keys [lang title head scripts header nav content footer request] who :identity}]
+  (render/check-scripts! scripts [:scripts])
+  (render/check-scripts! (:wb/scripts request) [:wb/scripts])
   (let [lang  (or lang (:wb/locale request))
         nonce (:wb/nonce request)
         body  (render/html (list (when header [:header.wb-header header])
@@ -63,7 +66,8 @@
       (when title [:title title])
       [:link {:rel "stylesheet" :href css-path}]
       (for [href (:wb/stylesheets request)] [:link {:rel "stylesheet" :href href}])
-      [:script (cond-> {:src htmx-path :defer true} nonce (assoc :nonce nonce))]
+      (for [src (distinct (concat [htmx-path] (:wb/scripts request) scripts))]
+        [:script (cond-> {:src src :defer true} nonce (assoc :nonce nonce))])
       head]
      [:body (cond-> {} token (assoc (keyword "hx-headers:inherited") (csrf-headers token)))
       (h/raw body)]]))

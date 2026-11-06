@@ -396,6 +396,25 @@
       (some-> (::csrf-used request) (vreset! true))
       token)))
 
+(def csrf-meta-name
+  "The `name` of the `<meta>` `csrf-meta` renders, for a script to find it by."
+  "csrf-token")
+
+(defn csrf-meta
+  "The `<meta>` a script reads the CSRF token from (since 0.22.0), for a page that calls
+  the server from a script with no htmx attribute or form the shell would see: `name`
+  `csrf-token`, the token as `content`, and the header to send it in as `data-header`,
+  so the script spells neither. Reading it marks the token used, as a form does, so the
+  shell also sends it from `<body>`. Nil when the session holds no token — an anonymous
+  visitor's, which CSRF checks by origin instead — or under `:csrf false`, so no empty
+  token is ever sent:
+
+    const m = document.querySelector('meta[name=\"csrf-token\"]');
+    if (m) headers[m.dataset.header] = m.content;"
+  [request]
+  (when-let [token (csrf-token request)]
+    [:meta {:name csrf-meta-name :content token :data-header csrf-header}]))
+
 (defn csrf-field
   "The hidden input a classic form needs; htmx requests carry the header
   instead. Nothing when the request carries no token — under `:csrf false`

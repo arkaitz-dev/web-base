@@ -37,7 +37,12 @@ The badge at the top is the version actually published.
 The library depends on `metosin/reitit-ring`, `hiccup`, `ring-jetty-adapter`,
 `tools.logging`, `tempura`, `ring-anti-forgery` and `integrant` — and nothing
 else reaches your classpath. Coercion is passed through: bring malli, spec or
-schema yourself.
+schema yourself. For malli it is `metosin/reitit-malli` at the version of the
+`reitit-ring` web-base declares (`0.10.1`): eight jars on your production classpath,
+malli and `org.clojure/test.check` among them, about 300 KB together (measured
+2026-11-06). Malli's `:uuid` takes an upper-case spelling too, so `/courses/6B33…` and
+`/courses/6b33…` reach the same handler with the same coerced id: two URLs per row,
+unless the host redirects one to the other.
 
 ## Quick start
 
@@ -178,6 +183,34 @@ after the gate, sending the visitor away the way the gate does:
 A second `:wb/gate` would not do: a gate's refusal goes to the login page or is a 403,
 never to a page of the host's choosing.
 
+**A resource that is not yours is a 404** (since 0.22.0). A gate answers a signed-in
+stranger 403, which tells them the course exists, and runs before coercion, seeing the
+raw id. `:wb/guard (fn [request] truthy)` runs after coercion, last before the handler,
+and its no is the 404 a path no route matches — the same response, headers and all, for
+a stranger signed in or not:
+
+```clojure
+["/courses/:id" {:parameters {:path [:map [:id :uuid]]}
+                 :wb/guard   (fn [r] (member? ds (:wb/subject r) (get-in r [:parameters :path :id])))}
+ ["" {:get course-page}]
+ ["/assignments" {:get  assignments
+                  :post {:wb/guard teaches? :handler add-assignment}}]]   ; the POST narrows
+```
+
+Guards compose as gates do — parent, then route, then method, each asked only if the
+one before admitted — and a child's `nil` keeps its parent's. One may sit under a method
+of a route with no routes under it; under a method of a route with children it is
+refused, as a gate is, since a child's method data would drop it. A guard that throws is
+a 500, never a refusal. Its answer is a yes or a no and nothing else: a handler that needs
+the row reads it again. And a multipart route still parses its body before any of this —
+a non-member's upload is written to disk, bounded by the route, and deleted when the 404
+is sent.
+
+`(testing/route-checks router)` reads which predicates check which endpoint, as
+`{[path method] {:gates [g …] :guards [f …]}}` over `testing/router` or `wb/router`: a
+test that declares an application's authorisation reads both, so a POST that lost its
+guard shows in its own row.
+
 ### Sessions
 
 The session travels in a cookie signed with a 16-byte key. Generate one once, in
@@ -270,11 +303,11 @@ cookie again, which that store could never revoke anyway.
 | `:static` | `create-resource-handler` options for the host's assets, e.g. `{:root "public"}` |
 | `:error-layout` | slot function used for error pages: receives `:content`, `:request`, `:error` |
 | `:i18n` | `{:dict tempura-dict :default-locale k :locales [k …] :locale-fn (fn [request] preferences)}` — `:locales` are the languages the site speaks, the default alone when absent (since 0.12.0); a `:dict` entry in any other is refused |
-| `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age seconds} :proxy-hops n}` — HSTS's `max-age` is seconds, the header's own unit (a year is `31536000`); a value past a billion is refused as milliseconds |
+| `:security` | `{:frame-options "DENY" :csp "…{nonce}…" :hsts {:max-age seconds} :proxy-hops n}` — HSTS's `max-age` is seconds, the header's own unit (a year is `31536000`); a value past a billion is refused as milliseconds. `:frame-options` is for browsers without CSP: a CSP that says `frame-ancestors` governs where both are sent, so relax framing there |
 | `:csrf` | `false` to disable the anti-forgery token; on for anything else |
 | `:sessionless` | `{"/health" handler "/api/" api}`: answered before the session — no session read or written, no CSRF, no locale, no subject; the request id, security headers and body limit still apply. A path ending in `/` takes everything under it (an exact path wins, a longer prefix over a shorter); `/` itself is refused. A handler may be a var; a path or prefix that covers one of `:routes` is refused |
 | `:max-body-bytes` | the largest request body read, `200000` by default — counted however it is sent, with a length or without; past it, a 413 (since 0.10.0) |
-| `:assets` | `[{:path "/name/" :root "classpath/prefix"}]`: resource roots served beside `/wb/`, before the session, with 304s; a path is one lower-case segment, never `/wb/`, never covering a route or a sessionless path (since 0.11.0) |
+| `:assets` | `[{:path "/name/" :root "classpath/prefix"}]`: resource roots served beside `/wb/`, before the session, with 304s; a path is one lower-case segment, never `/wb/`, never covering a route or a sessionless path (since 0.11.0). A root serves every resource under its classpath prefix, so a prefix that also holds migrations or configuration serves them too: give scripts and images a prefix of their own, `app/js` at `/js/`. A host's `:static` already serves `public/` with the same revalidation |
 | `:stylesheets` | `["/app.css"]`: linked by the shell after `wb.css`, a plugin's before the host's, on every page and error page drawn with the shell (since 0.11.0) |
 | `:plugins` | values contributing the keys above; see "Plugins" (since 0.11.0) |
 
@@ -366,11 +399,13 @@ base's four as well, silently. Three things a host may want there:
 the 303 after a classic form. A 404 or 403 the handler decides is
 `(error/throw! {:status 404})`: it reaches the error renderer, not the layouts. A thing
 that exists but is not the subject's is a 404 too — "not yours" answered as "not found",
-so an id tried at random says nothing about what exists.
+so an id tried at random says nothing about what exists. For a whole subtree of such
+things, `:wb/guard` says it once on the route, as "A host, in full" shows.
 
 `:wb/height` is rarely written. A navigation renders the whole stack and an htmx
-swap renders none of it; name a height only for the case in between — a tab
-swap that wants its section but not the shell. It counts from the innermost
+swap renders none of it; name a height only for the cases in between — a tab
+swap that wants its section but not the shell, or `0` for a script's `fetch` that swaps
+the answer in itself. It counts from the innermost
 layout, so an outer layout added later never invalidates a height already
 written.
 
@@ -482,6 +517,10 @@ answers a swap with its fragment, 200, and a navigation with a 303 to the locati
 this relies on htmx 4 swapping a 422; under htmx 2 a host would have to allow it in
 `htmx.config.responseHandling`. The fragment is built on every call and thrown away on a
 navigation; a host whose fragment costs queries branches on `htmx/partial-request?`.
+`response/unprocessable` is also the answer to a script's `fetch` that swaps the list in
+itself — with `{:height 0}`, since a fetch is no htmx request and would get the layouts
+— and to a classic form whose POST draws the page from the view its GET shares, the road
+beside `rerender` when re-reading the page costs more than drawing it.
 
 **One field, one string.** `(wb/param request "name")` is the field when it arrived once as
 a string, and nil when it is absent, sent twice or a file. When those must differ — an
@@ -557,7 +596,9 @@ A spreadsheet export is `(csv/attachment rows "orders.csv")` (since 0.18.0, name
 and ends lines in CRLF. A field a spreadsheet would run as a formula gets an apostrophe
 before it, so the user's text arrives as text: that is any field starting with `=`, `+`,
 `-`, `@`, a tab, a carriage return, a line feed, or a full-width `＝＋－＠`, OWASP's CSV
-injection list. `csv/write` gives the bytes alone.
+injection list. `csv/write` gives the bytes alone. The guard has a price on identifiers:
+an address may begin with `+`, `-` or `=`, and `+amy@example.test` is exported as
+`'+amy@example.test`, a different string to whoever reads the file back.
 
 A list in numbered pages (since 0.18.0, namespace `dev.arkaitz.web-base.paging`): count
 the rows, then let `paging/paged` pick the page the query's `page` asks for —
@@ -593,6 +634,12 @@ kept. A cursor whose row is gone, an empty page under a cursor and a `before` th
 reaches the start answer a 303 to the first page; a cursor of any other shape, both
 cursors, or one sent twice is a 404. No "page N of M": a cursor knows where it is, not
 how far.
+
+For a list ordered by a column `a` that may tie, then by a unique `id`, the key is the
+anchor's `[a id]`; after it come the rows with `a > ?`, or `a = ?` and `id > ?`, in
+`a, id` order, and before it the mirror, `a < ?` or `a = ?` and `id < ?`, in `a DESC, id
+DESC`. Test `:before` with at least three pages and a cursor on a tied row: with two,
+every `before` reaches the start, a 303 whatever the SQL says.
 
 `:max-file-size` is required. `:max-files` (since 0.22.0, replacing `:max-file-count`,
 which counted every part, the CSRF field included) counts the parts that carry a file —

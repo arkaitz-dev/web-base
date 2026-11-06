@@ -86,7 +86,11 @@
   security headers it lacks; a header the handler set is kept. Every request
   gets `:wb/nonce`; when the host configures `:csp`, `{nonce}` in it is
   replaced by that request's nonce and the policy is sent. `:frame-options`
-  is `DENY` by default, a string to change it, `false` to omit it."
+  is `DENY` by default, a string to change it, `false` to omit it.
+
+  `X-Frame-Options` is for a browser without CSP. Where a CSP says `frame-ancestors`, it
+  governs and `X-Frame-Options` is ignored (CSP Level 3), so relaxing framing through
+  `:frame-options` alone sends both and changes nothing: change `frame-ancestors` too."
   [handler {:keys [csp] :as config}]
   (let [static (static-headers config)]
     (fn [request]
@@ -99,7 +103,11 @@
 (defn private
   "`response` with `Cache-Control: no-store` unless it already says how it may be cached.
   For what is somebody's own — a signed-in page, a page carrying a session's CSRF token —
-  which a shared cache must never hand to the next visitor, nor a shared computer keep."
+  which a shared cache must never hand to the next visitor, nor a shared computer keep.
+
+  The base already applies it to every response to a request with a subject or a
+  session (`gate/wrap-subject`), so a host calls it only for what is somebody's and
+  reached with neither: a file behind a credential in its URL, followed from a mail."
   [response]
   (some-> response (update :headers add-missing {"Cache-Control" "no-store"})))
 

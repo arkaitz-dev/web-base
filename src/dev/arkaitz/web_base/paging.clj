@@ -107,6 +107,18 @@
   It asks for one row more than a page to know whether there is another, and gives the
   `:before` rows back in the list's order.
 
+  For a list ordered by a column `a` that may tie, and then by a unique `id`, the key is
+  the anchor row's `[a id]`, and `fetch` reads, after it, the rows whose `a` is greater,
+  or equal with a greater `id` — `a > ? OR (a = ? AND id > ?)`, ordered `a, id` — and
+  before it the mirror: `a < ? OR (a = ? AND id < ?)`, ordered `a DESC, id DESC`. The
+  anchor is read again by `decode`, scoped as the list is, so a cursor from another
+  list's row is no cursor here.
+
+  Test `:before` with at least three pages, and a cursor on a row that ties with the one
+  before it. With two, every `before` reaches the start, which is a 303 to the first page
+  whatever the SQL says: a `<` written `>`, an ascending order or a flipped tie term all
+  stay green (measured by a host, academy FRICTION A24).
+
   A cursor whose row is gone, a page with no rows under a cursor, and a `before` that
   reaches the start each answer a 303 to the first page: the start has one spelling, and a
   link that worked a second ago is never a 404. A cursor of a shape nobody builds is a

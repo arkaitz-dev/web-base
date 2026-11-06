@@ -5,6 +5,47 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## Unreleased (0.22.0)
+
+The academy's friction (A2–A35), decided by a panel and chosen by the user.
+
+- **Breaking:** `:wb/multipart :max-file-count` is gone, refused at construction as an
+  unknown key. It counted every part, the CSRF field included. `:max-files` counts the
+  parts that carry a file name and refuses the one past it before anything of it is
+  written; the empty part of a file input left empty is written nowhere. A host renames
+  the key and drops the fields it was adding to the count: `{:max-file-count 2}` for
+  one file and its form is `{:max-files 1}`. A form that used to reach its own count
+  check with one file too many now gets the 413.
+- **Breaking:** every 413 the base produces names the bound under `:wb/limit` —
+  `:file-size`, `:files` or `:body`, for the error layout to say which to fix. A body
+  the parser cannot read, or a text field past `:max-file-size`, is a 413 naming none;
+  a body whose declared length is past the bound is refused before any layout runs.
+- **Breaking:** `response/attachment`'s ASCII fallback turns `/`, `\` and `:` into `_`
+  too; `filename*` still carries the name whole. `csv/attachment` goes through it.
+- **Breaking (tests):** `testing/visit` writes a multipart part's name and file name as
+  a browser does, `"`, CR and LF as `%22`, `%0D` and `%0A`; a host test that uploaded
+  such a name now sees the browser's spelling. Its refusals name `{:fetch? true}`
+  beside `{:htmx? true}`.
+- `:wb/guard (fn [request] truthy)`: asked after the gate and after coercion, its no is
+  the 404 of a path no route matches, for a stranger signed in or not. Composed parent,
+  route, method, as gates are; refused when not callable, under a method of a route
+  with children, or dropped by `:middleware ^:replace`. `testing/route-checks` reads
+  `{[path method] {:gates … :guards …}}`.
+- `wb/upload`, the one file of a field or nil; `wb/params`, a field's values as a
+  vector of strings, read body-first like `param`.
+- `security/csrf-meta`: `<meta name="csrf-token" content=… data-header=…>` for a
+  page's script, nil without a stored token. The shell's `:scripts` slot and route
+  `:wb/scripts` load local scripts under the CSP nonce; another origin's is refused.
+- `testing/visit {:fetch? true}`: the token as the CSRF header, no form field, no htmx
+  headers.
+- `response/attachment` takes `{:content-type t :inline? b}`; `:inline?` only for
+  `application/pdf`, `image/png`, `image/jpeg`, `image/gif` and `image/webp`, spelt
+  exactly — never SVG or HTML. A refused stream is closed.
+- Docs: the coercion coordinate and its cost, and malli's upper-case `:uuid`; an
+  `:assets` prefix serves everything under it; `unprocessable`'s three callers; the
+  keyset predicate and its three-page test; who marks a download `no-store`; the CSV
+  guard's price on identifiers; `:frame-options` beside `frame-ancestors`.
+
 ## 0.21.0 — 2026-11-06
 
 Three items left open, decided by a panel and chosen by the user.

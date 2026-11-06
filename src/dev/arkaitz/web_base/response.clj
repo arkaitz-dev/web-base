@@ -42,11 +42,17 @@
   {:status 303 :headers {"Location" location} :body ""})
 
 (defn unprocessable
-  "`ok` with status 422: a form that came back with its errors, rendered by the handler
-  that refused it — the road for an htmx form that swaps only itself, where re-running
-  the page's GET would render more than the target. htmx 4 swaps a 422; htmx 2 swapped
-  no 4xx unless `htmx.config.responseHandling` said so. For a whole-page form,
-  `dev.arkaitz.web-base/rerender` renders the page's own GET instead."
+  "`ok` with status 422: what the handler that refused a request drew, with its reason.
+  Three callers, all legitimate:
+  - an htmx form that swaps only itself, where re-running the page's GET would render
+    more than the target (htmx 4 swaps a 422; htmx 2 swapped no 4xx unless
+    `htmx.config.responseHandling` said so);
+  - a page's script that sends with `fetch` and swaps the answer in itself: it is no htmx
+    request, so the layouts render unless `{:height 0}` says otherwise;
+  - a classic form whose POST draws the page itself, from the view its GET shares — the
+    refused values at hand, no second read.
+  `dev.arkaitz.web-base/rerender` is the other road for a classic form: it runs the
+  page's own GET, so the POST builds nothing, at the cost of that GET's reads."
   ([body] (assoc (ok body) :status 422))
   ([body opts] (assoc (ok body opts) :status 422)))
 

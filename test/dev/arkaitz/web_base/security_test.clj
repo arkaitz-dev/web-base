@@ -368,7 +368,7 @@
   (let [limited  @#'security/limited
         source   (fn [n] (java.io.ByteArrayInputStream. (byte-array (range n))))
         stream   (fn ^java.io.InputStream [n] (limited (source n) 4))
-        refusal  ["web-base: request body over its limit" {:type :dev.arkaitz.web-base.security/body :status 413}]
+        refusal  ["web-base: request body over its limit" {:type :dev.arkaitz.web-base.security/body :status 413 :wb/limit :body}]
         refused  (fn [f] (try (f) ::served (catch ExceptionInfo e [(ex-message e) (ex-data e)])))]
     (let [s (stream 10)]
       (is (= [0 1 2 3] (vec (repeatedly 4 #(.read s)))) "read(): the 4th byte is served, and they are the source's")

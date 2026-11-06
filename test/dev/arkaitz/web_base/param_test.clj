@@ -41,6 +41,16 @@
    :body   (pr-str [(get-in r [:params "who"]) (wb/param r "who") (wb/param r :who)
                     (wb/param r "who" ::absent) (wb/param r "page" ::absent)])})
 
+(defn- echo-params
+  "Ring's raw value beside what `params` reads, and whether each answer is a vector —
+  printed, a list and a vector look alike."
+  [r]
+  {:status 200
+   :body   (pr-str (let [answers [(wb/params r "who") (wb/params r :who) (wb/params r "photo") (wb/params r "page")]]
+                     [(mapv shown (let [v (get-in r [:params "who"])] (if (vector? v) v [v])))
+                      answers
+                      (every? vector? answers)]))})
+
 (def ^:private app
   (wb/handler {:session {:key KEY}
                :routes  [["/form" {:get (fn [r] (response/ok [:form (security/csrf-field r)]))}]
@@ -49,7 +59,9 @@
                          ["/n" {:get echo-not-found :post echo-not-found}]
                          ["/nm" {:wb/multipart {:max-file-size 1024} :post echo-not-found}]
                          ["/q" {:get echo-precedence :post echo-precedence}]
-                         ["/qm" {:wb/multipart {:max-file-size 1024} :post echo-precedence}]]}))
+                         ["/qm" {:wb/multipart {:max-file-size 1024} :post echo-precedence}]
+                         ["/s" {:get echo-params :post echo-params}]
+                         ["/sm" {:wb/multipart {:max-file-size 1024} :post echo-params}]]}))
 
 (def ^:private photo {"photo" {:filename "a.png" :content-type "image/png" :bytes (.getBytes "PNG" "UTF-8")}})
 
@@ -126,3 +138,30 @@
     (let [[status observation] (observed :post "/p" [["who" value]] {})]
       (is (= 200 status) "witness: the request reached the handler")
       (is (= expected observation) (str (pr-str value) ": returned as :params holds it, and a keyword key is no key")))))
+
+(deftest params-answers-every-value-of-a-field-as-a-vector-of-strings--the-body-over-the-query--files-dropped--empty-when-absent
+  (doseq [[label method path params opts expected]
+          [["query, once" :get "/s" [["who" "Ada"]] {} [["Ada"] [] [] []]]
+           ["query, twice" :get "/s" [["who" "Ada"] ["who" "Bob"]] {} [["Ada" "Bob"] [] [] []]]
+           ["form, once" :post "/s" [["who" "Ada"]] {} [["Ada"] [] [] []]]
+           ["form, twice" :post "/s" [["who" "Ada"] ["who" "Bob"]] {} [["Ada" "Bob"] [] [] []]]
+           ["form, empty" :post "/s" [["who" ""]] {} [[""] [] [] []]]
+           ["form, absent" :post "/s" [] {} [[] [] [] []]]
+           ["multipart, twice, beside a file" :post "/sm" [["who" "Ada"] ["who" "Bob"]] {:files photo} [["Ada" "Bob"] [] [] []]]
+           ["multipart, a text field and a file of one name" :post "/sm" [["photo" "text"]] {:files photo} [[] [] ["text"] []]]
+           ["form over the query" :post "/s?who=evil&page=2" [["who" "good"] ["who" "better"]] {} [["good" "better"] [] [] ["2"]]]
+           ["multipart over the query" :post "/sm?who=evil&page=2" [["who" "good"]] {:files photo} [["good"] [] [] ["2"]]]]]
+    (testing label
+      (let [[status [_ answers vectors?]] (observed method path params opts)]
+        (is (= 200 status) "witness: the request reached the handler")
+        (is (true? vectors?) "every answer is a vector, an empty one included")
+        (is (= expected answers) "[params \"who\", params :who, params \"photo\", params \"page\"]"))))
+  (testing "witness: Ring's own :params lets the query win on a urlencoded form, so the body's values above are params' choice"
+    (is (= ["evil"] (first (second (observed :post "/s?who=evil" [["who" "good"]] {}))))))
+  (testing "the method decides, as for param"
+    (let [request {:params {"who" ["q1" "q2"]} :form-params {"who" "body"}}]
+      (is (= [[["q1" "q2"] ["q1" "q2"] ["q1" "q2"] ["body"] ["body"] ["body"] ["body"]] true]
+             (let [answers (mapv #(wb/params (assoc request :request-method %) "who") [:get :head :options :post :put :patch :delete])]
+               [answers (every? vector? answers)])))
+      (is (= [["q"] true] (let [a (wb/params {:request-method :post :params {"who" "q"}} "who")] [a (vector? a)]))
+          "a POST with no body field reads the query"))))

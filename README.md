@@ -479,6 +479,14 @@ multipart alike, and the query's only for what the body does not carry (since 0.
         :else                   (error/throw! {:status 404})))   ; twice, or unknown
 ```
 
+**Several values, one field.** `(wb/params request "lesson")` (since 0.22.0) is always a
+vector of strings: `[]` when absent, one string for a field sent once, every value in
+order for one sent several times — a multi-select, or a list a script posts as
+`URLSearchParams` — with a file under that name left out. It reads from where `param`
+reads: on a POST the body's values, and the query's only when the body does not carry the
+field at all — so a multi-select left wholly unselected, which sends nothing, answers what
+the action's query names under that field, if anything.
+
 **A notice after a redirect** — "saved", "the invitation is on its way" — needs no
 session: the 303 names it in the query, and the page draws only names it knows, so a
 link nobody sent cannot put words on the page:
@@ -505,12 +513,13 @@ link resolves; a test that reads the names your source spells against the router
 request, since the token is one of its fields:
 
 ```clojure
-["/avatar" {:wb/multipart {:max-file-size 1048576 :max-file-count 3}
-            :post (fn [request] (let [[{:keys [filename size tempfile]}] (wb/uploads request "photo")] …))}]
+["/avatar" {:wb/multipart {:max-file-size 1048576 :max-files 1}
+            :post (fn [request] (if-let [{:keys [filename size tempfile]} (wb/upload request "photo")] … (refuse …)))}]
 ```
 
 `wb/uploads` (since 0.17.0) answers the field's files as `{:filename :content-type
-:tempfile :size}`, one or several alike: the empty part a browser sends for a file input
+:tempfile :size}`, one or several alike, and `wb/upload` (since 0.22.0) the one file of a
+form with one file input, nil for none or several: the empty part a browser sends for a file input
 left empty is left out, the name is its last segment — nothing a `/` or `\` separates,
 never `.` or `..` — and a part with no type is `application/octet-stream`. The name is
 still the sender's: keep it as a label and store the file under a key of your own, since
@@ -559,13 +568,22 @@ reaches the start answer a 303 to the first page; a cursor of any other shape, b
 cursors, or one sent twice is a 404. No "page N of M": a cursor knows where it is, not
 how far.
 
-`:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
-other fields included — so it is your files plus the form's other fields, and a field
-added to the form takes a file away from the limit unless you raise it; `:max-body-bytes` bounds the whole body, and without it the route
-takes its file size plus the base's limit. A part past them, or a body past them as it is
-read, is the 413 page in the negotiated language; a body whose declared length is already
-past the route's bound is refused before it is read, with the base's own 413 page, since
-nothing inside has run. A no-JS form works as it is — `csrf-field` inside it — and a
+`:max-file-size` is required. `:max-files` (since 0.22.0, replacing `:max-file-count`,
+which counted every part, the CSRF field included) counts the parts that carry a file —
+not the text fields, not the empty part of an input left empty, which is written nowhere
+— and refuses the one past it before anything of it is written. `:max-body-bytes` bounds the whole body, and without
+it the route takes its file size plus the base's limit. A part past them, or a body past
+them as it is read, is the 413 page in the negotiated language, its datum naming the bound under
+`:wb/limit` — `:file-size`, `:files` or `:body` — for the `:error-layout` to tell the
+person which one to fix. A body the parser cannot read, or a text field past
+`:max-file-size` (the parser bounds every part it reads by it — the empty part of an
+input left empty is skipped unread, bounded by the body alone), is a 413 that names no bound, so a
+layout reading `:wb/limit` keeps a default. A body whose declared length is already past
+the route's bound is refused before it is read, with the base's own 413 page — its datum
+says `:body`, but no `:error-layout` sees it, since nothing inside has run. A browser
+declares the length, so give `:max-body-bytes` room above the files it allows: a file past
+`:max-file-size` that still fits the body reaches your page as `:file-size`, and one past
+the body's bound only reaches the base's. A no-JS form works as it is — `csrf-field` inside it — and a
 multipart body sent to a route that did not declare it is never parsed: CSRF refuses it.
 
 The files live for the request: they are deleted once the handler has answered, so move

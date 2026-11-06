@@ -124,7 +124,7 @@
         h       (app api :max-body-bytes 10)
         sent    (fn [opts] (reset! entered []) (let [r (wt/call h :post "/api/x" opts)] [(:status r) @entered]))]
     (is (= [413 []] (sent {:body "12345678901"})) "a declared length past the limit never enters the handler")
-    (is (= [413 [[:entered nil] [:threw {:status 413}]]] (sent {:body "12345678901" :chunked? true}))
+    (is (= [413 [[:entered nil] [:threw {:status 413 :wb/limit :body}]]] (sent {:body "12345678901" :chunked? true}))
         "chunked, it enters with no length, and the read throws the body's 413")
     (is (= [[200 [[:entered 10]]] [200 [[:entered nil]]]] [(sent {:body "1234567890"}) (sent {:body "1234567890" :chunked? true})])
         "the limit itself is read whole both ways"))

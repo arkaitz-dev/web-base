@@ -160,7 +160,7 @@
     (doseq [declared [17 :absent]]
       (lt/with-log
         (answered h (post-body "/api/x" over declared))
-        (is (= [{:status 413} []] [(:datum (first @seen)) (filter #(= :error (:level %)) (lt/the-log))])
+        (is (= [{:status 413 :wb/limit :body} []] [(:datum (first @seen)) (filter #(= :error (:level %)) (lt/the-log))])
             (str declared ": a 413 is no error to log"))))
     (answered h (mock/request :get "/api/datum"))
     (is (= {:status 422 :title "bad" :detail "x"} (:datum (first @seen))) "the host's own datum, as thrown")))

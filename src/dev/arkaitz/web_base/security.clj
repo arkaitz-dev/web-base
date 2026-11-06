@@ -111,9 +111,10 @@
   200000)
 
 (defn- over-limit!
-  "The 413 a body past its limit is answered with, marked as the body's own failure."
+  "The 413 a body past its limit is answered with, marked as the body's own failure and
+  naming the bound, as an upload's 413 does (since 0.22.0)."
   []
-  (throw (ex-info "web-base: request body over its limit" {:type ::body :status 413})))
+  (throw (ex-info "web-base: request body over its limit" {:type ::body :status 413 :wb/limit :body})))
 
 (defn- implements?
   "Whether `c` implements the interface named `interface`, by name: Jetty lives behind
@@ -150,7 +151,7 @@
 
 (defn body-failure
   "The request body's own failure somewhere in `e`'s cause chain, as data — `{:status
-  413}` past its limit, `{:status s :lost class-name}` when the client did not send it —
+  413 :wb/limit :body}` past its limit, `{:status s :lost class-name}` when the client did not send it —
   or nil. Marked where the body is read, so a failure of anything else that merely looks
   like Jetty's (an upstream client, a driver) is never mistaken for the client's."
   [^Throwable e]
@@ -175,16 +176,17 @@
       (reset [] (throw (java.io.IOException. "mark/reset not supported"))))))
 
 (defn wrap-body-limit
-  "Refuses a request body larger than `(limit-for request)` bytes with a 413: at once,
-  unread, when its declared length says so; otherwise as it is read, whoever reads it.
-  `render` answers the refusal made here, before anything else runs."
+  "Refuses a request body larger than `(limit-for request)` bytes with a 413 whose datum
+  says `:wb/limit :body`: at once, unread, when its declared length says so; otherwise as
+  it is read, whoever reads it. `render` answers the refusal made here, before anything
+  else runs."
   [handler limit-for render]
   (fn [request]
     (let [limit    (limit-for request)
           declared (or (:content-length request)
                        (some-> (get-in request [:headers "content-length"]) parse-long))]
       (if (and declared (< limit declared))
-        (render {:status 413} request)
+        (render {:status 413 :wb/limit :body} request)
         (handler (cond-> request (:body request) (update :body limited limit)))))))
 
 (defn- forwarded

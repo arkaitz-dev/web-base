@@ -47,7 +47,7 @@
 (defn- app [sent]
   (wb/handler {:session {:key KEY}
                :routes  [["/form" {:get (fn [r] {:status 200 :body [:form (security/csrf-field r)]})}]
-                         ["/u" {:wb/multipart {:max-file-size 2048 :max-file-count 10} :post (echo sent)}]]}))
+                         ["/u" {:wb/multipart {:max-file-size 2048 :max-files 10} :post (echo sent)}]]}))
 
 (defn- sent-parts
   "`[status files raw tempfiles-alive-after]` for one form with `params` and `files`."
@@ -80,6 +80,48 @@
           (is (true? vector?) "a vector, empty when there is no file — never nil")
           (is (= expected files) "[filename content-type size bytes-as-sent] per file, in order")
           (is (every? false? alive) "the temporary files die with the answer"))))))
+
+(defn- one-upload
+  "`[status count upload same?]` for one form: how many files `uploads` saw, what `upload`
+  answered — its temporary file replaced by whether its bytes are the ones sent — and
+  whether it is `uploads`' first."
+  [params files]
+  (let [sent    (mapv (comp :bytes second) files)
+        as-sent #(boolean (some (fn [b] (Arrays/equals ^bytes b (Files/readAllBytes (.toPath ^File %)))) sent))
+        h       (wb/handler {:session {:key KEY}
+                             :routes  [["/form" {:get (fn [r] {:status 200 :body [:form (security/csrf-field r)]})}]
+                                       ["/u" {:wb/multipart {:max-file-size 2048}
+                                              :post (fn [r]
+                                                      (let [one (wb/upload r "f")]
+                                                        {:status 200
+                                                         :body   (pr-str [(count (wb/uploads r "f"))
+                                                                          (some-> one (update :tempfile as-sent))
+                                                                          (= one (first (wb/uploads r "f")))])}))}]]})
+        b       (wt/visit (wt/browser h) :get "/form")
+        r       (:response (wt/visit b :post "/u" params {:files files}))]
+    (into [(:status r)] (when (= 200 (:status r)) (edn/read-string (:body r))))))
+
+(deftest upload-answers-the-one-file-of-a-field-as-uploads-cuts-it--and-nil-for-none-or-several
+  (let [empty-input (part "" "application/octet-stream" (byte-array 0))
+        a           {:filename "a.png" :content-type "image/png" :size 263 :tempfile true}]
+    (doseq [[label params files expected]
+            [["one" {} [(part "a.png" "image/png" (payload 1))] [1 a true]]
+             ["one sent with a whole path" {} [(part "C:\\Users\\a\\photo.png" "image/png" (payload 1))]
+              [1 (assoc a :filename "photo.png") true]]
+             ["one with no type" {} [(part "a.png" "" (payload 1))] [1 (assoc a :content-type "application/octet-stream") true]]
+             ["an empty file chosen by name" {} [(part "empty.txt" "text/plain" (byte-array 0))]
+              [1 {:filename "empty.txt" :content-type "text/plain" :size 0 :tempfile true} true]]
+             ["two" {} [(part "a.png" "image/png" (payload 1)) (part "b.bin" "application/octet-stream" (payload 2))] [2 nil false]]
+             ["an empty input" {} [empty-input] [0 nil true]]
+             ["an empty input beside one file" {} [empty-input (part "a.png" "image/png" (payload 1))] [1 a true]]
+             ["a text field of the same name beside one file" [["f" "text"]] [(part "a.png" "image/png" (payload 1))] [1 a true]]
+             ["a text field alone" [["f" "text"]] [] [0 nil true]]]]
+      (testing label
+        (let [[status n one same?] (one-upload params files)]
+          (is (= 200 status) "witness: the request reached the handler")
+          (is (= (first expected) n) "witness: uploads saw the files the case sends")
+          (is (= (second expected) one) "upload: the file as uploads cuts it, its bytes the ones sent — or nil")
+          (is (= (nth expected 2) same?) "and it is uploads' first exactly when there is one"))))))
 
 (deftest uploads-names-a-file-by-its-last-segment-never-a-path-and-types-an-untyped-part
   (doseq [[sent-name ct expected-name expected-ct]

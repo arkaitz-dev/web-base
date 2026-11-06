@@ -1044,11 +1044,11 @@
 (deftest an-upload-past-its-routes-limits-is-a-413
   (let [two-files (merge (photo 10) {"other" {:filename "b" :bytes (byte-array 1)}})]
     (is (= 413 (:status (upload (upload-app {:max-file-size 1000}) "/upload" (photo 1001)))) "a file one byte over :max-file-size")
-    ;; Ring counts every part: here the caption, the CSRF field and the two files, four.
-    (is (= 200 (:status (upload (upload-app {:max-file-size 1000 :max-file-count 4}) "/upload" two-files)))
-        "control: four parts under a count of four pass")
-    (is (= 413 (:status (upload (upload-app {:max-file-size 1000 :max-file-count 3}) "/upload" two-files)))
-        "four parts under a count of three are refused")
+    ;; Four parts — the caption, the CSRF field and two files — of which two are files.
+    (is (= 200 (:status (upload (upload-app {:max-file-size 1000 :max-files 2}) "/upload" two-files)))
+        "two files under :max-files 2 pass, the caption and the CSRF field not counted")
+    (is (= 413 (:status (upload (upload-app {:max-file-size 1000 :max-files 1}) "/upload" two-files)))
+        "two files under :max-files 1 are refused")
     (is (= 413 (:status (upload (upload-app {:max-file-size 5000 :max-body-bytes 3000}) "/upload" (photo 4000))))
         "a body past the route's :max-body-bytes, whatever the file size allows")
     (is (= 200 (:status (upload (upload-app {:max-file-size 300000}) "/upload" (photo 300000))))
@@ -1067,7 +1067,7 @@
   (let [original @#'wb/request-store
         requests (atom [])]
     (with-redefs-fn {#'wb/request-store
-                     (fn [created]
+                     (fn [created max-files]
                        (let [entry (atom {:files [] :existed [] :prior []})]
                          (swap! requests conj entry)
                          (add-watch created ::spy
@@ -1075,7 +1075,7 @@
                                       (let [^java.io.File file (peek new)]
                                         (swap! entry #(-> % (update :files conj file) (update :existed conj (.exists file))
                                                           (update :prior conj (mapv (fn [^java.io.File o] (.length o)) old)))))))
-                         (original created)))}
+                         (original created max-files)))}
       (fn [] [(f) (mapv deref @requests)]))))
 
 (deftest every-upload-temp-file-exists-while-the-request-runs-and-is-gone-when-it-ends--after-a-200--a-csrf-403--and-a-413-mid-parse
@@ -1119,6 +1119,106 @@
          (assoc-in [:headers "content-length"] (str (alength bytes)))
          (assoc-in [:headers "content-type"] content-type))
      size]))
+
+(defn- limits-app
+  "A host over one `:wb/multipart spec` route whose `:error-layout` keeps the datum it is
+  handed in `seen`, and whose handler notes it ran and echoes every file it received, by
+  field: `[[field filename size] …]`."
+  [spec seen ran]
+  (wb/handler (config :error-layout (fn [{:keys [content error]}] (reset! seen error) [:main [:h1 (pr-str error)] content])
+                      :routes [["/form" {:wb/layouts [(fn [{:keys [content request]}] [:main content (security/csrf-field request)])]
+                                         :get (fn [_] {:status 200 :body [:p "form"]})}]
+                               ["/upload" {:wb/multipart spec
+                                           :post (fn [r] (reset! ran true)
+                                                   {:status 200
+                                                    :body   (pr-str (vec (for [field ["a" "b" "c" "e"] f (wb/uploads r field)]
+                                                                           [field (:filename f) (:size f)])))})}]
+                               upload-login])))
+
+(defn- named [n size] {:filename n :bytes (byte-array size (byte 1))})
+
+(deftest max-files-counts-named-files-only--exactly-n-pass--the-n-plus-oneth-is-a-413-naming-files-before-its-temp-file-exists
+  (let [seen  (atom ::never)
+        ran   (atom false)
+        send  (fn [spec files]
+                (reset! seen ::never) (reset! ran false)
+                (let [[r requests] (spying-on-uploads #(upload (limits-app spec seen ran) "/upload" files))]
+                  [r requests]))
+        three [["a" (named "a.bin" 10)] ["b" (named "b.bin" 20)] ["c" (named "c.bin" 30)]]
+        empty ["e" {:filename "" :bytes (byte-array 0)}]]
+    (let [[r requests] (send {:max-file-size 1000} three)]
+      (is (= [200 "[[\"a\" \"a.bin\" 10] [\"b\" \"b.bin\" 20] [\"c\" \"c.bin\" 30]]" 1]
+             [(:status r) (:body r) (count requests)])
+          "witness: with no :max-files the harness's three files all reach the handler, through one store"))
+    (let [[r [req]] (send {:max-file-size 1000 :max-files 2} [(first three) (second three) empty])]
+      (is (= [200 "[[\"a\" \"a.bin\" 10] [\"b\" \"b.bin\" 20]]" ::never] [(:status r) (:body r) @seen])
+          "two files beside an empty input, the caption and the CSRF field: served — only named files count")
+      (is (= [2 [false false]] [(count (:files req)) (mapv #(.exists ^java.io.File %) (:files req))])
+          "the empty input is written nowhere, and the two files' temp files are gone after"))
+    (let [[r [req]] (send {:max-file-size 1000 :max-files 2} (into [empty] (take 2 three)))]
+      (is (= 200 (:status r)) "an empty input that arrives first takes no file's place"))
+    (let [temp-files      #(count (filter (fn [^java.io.File f] (.startsWith (.getName f) "wb-upload-"))
+                                          (.listFiles (java.io.File. (System/getProperty "java.io.tmpdir")))))
+          before          (temp-files)
+          [r [req]]       (send {:max-file-size 1000 :max-files 2} three)]
+      (is (= before (temp-files)) "witness: the temporary directory holds no more of these files than before the request")
+      (is (= [413 {:status 413 :wb/limit :files} false] [(:status r) @seen @ran])
+          "a third named file under :max-files 2: the host's 413 page, its datum naming :files")
+      (is (clojure.string/includes? (:body r) "<h1>{:status 413, :wb/limit :files}</h1>") "the page the person sees carries it")
+      (is (= [[true true] [[] [10]] [false false]]
+             [(:existed req) (:prior req) (mapv #(.exists ^java.io.File %) (:files req))])
+          "only the first two were written, whole, before the third was refused — it never reached the disk"))
+    (let [[r [req]] (send {:max-file-size 1000 :max-files 2} [["a" (named "1" 10)] ["a" (named "2" 20)] ["a" (named "3" 30)]])]
+      (is (= [413 {:status 413 :wb/limit :files} 2] [(:status r) @seen (count (:files req))])
+          "three files under one field name count as three"))
+    (let [app (limits-app {:max-file-size 1000 :max-files 2} seen ran)]
+      (is (= [200 200] (mapv (fn [_] (:status (upload app "/upload" (take 2 three)))) [1 2]))
+          "two uploads of two files each through one handler: the count starts again with each request"))
+    (let [[r [req]] (send {:max-file-size 1000 :max-files 1} (into [(first three)] (repeat 1000 empty)))]
+      (is (= [200 "[[\"a\" \"a.bin\" 10]]" 1] [(:status r) (:body r) (count (:files req))])
+          "a thousand empty inputs beside one file under :max-files 1: served, and one temporary file written, not a thousand and one"))
+    (let [[r [req]] (send {:max-file-size 1000 :max-files 1} [["e" {:filename "" :bytes (byte-array 500 (byte 1))}]])]
+      (is (= [200 "[]" 0] [(:status r) (:body r) (count (:files req))])
+          "a part with no file name is no file even when it carries bytes: written nowhere, and uploads has none"))
+    (let [[r _] (send {:max-file-size 1000 :max-files 1} [["a" (named "a.bin" 1001)]])]
+      (is (= [413 {:status 413 :wb/limit :file-size}] [(:status r) @seen])
+          "one file past its size under :max-files 1: the size refused it, and the datum says so"))))
+
+(deftest every-413-names-the-bound-that-fired--files--file-size--body-as-read--and-a-malformed-body-names-none
+  (let [seen     (atom ::never)
+        ran      (atom false)
+        boundary @#'testing/boundary
+        raw      (fn [spec request]
+                   (reset! seen ::never) (reset! ran false)
+                   (let [r ((wb/handler (config :csrf false :error-layout (fn [{:keys [content error]}] (reset! seen error) [:main content])
+                                                :routes [["/upload" {:wb/multipart spec
+                                                                     :post (fn [_] (reset! ran true) {:status 200 :body "ok"})}]]))
+                            request)]
+                     [(:status r) @seen @ran]))
+        unsized  (fn [n type] (let [[request _] (multipart-request "/upload" n type)]
+                                (-> request (dissoc :content-length) (update :headers dissoc "content-length"))))
+        typed    (str "multipart/form-data; boundary=" boundary)]
+    (is (= [nil nil] (let [r (unsized 3001 typed)] [(:content-length r) (get-in r [:headers "content-length"])]))
+        "witness: these bodies declare no length, so the body limit finds them as they are read")
+    (is (= [200 ::never true] (raw {:max-file-size 5000 :max-body-bytes 3000} (unsized 3000 typed)))
+        "control: a body of exactly :max-body-bytes is served")
+    (is (= [413 {:status 413 :wb/limit :body} false] (raw {:max-file-size 5000 :max-body-bytes 3000} (unsized 3001 typed)))
+        "one byte past :max-body-bytes while read: the datum names :body")
+    (is (= [413 {:status 413 :wb/limit :file-size} false] (raw {:max-file-size 100 :max-files 5} (unsized 1000 typed)))
+        "one file past :max-file-size: the datum names :file-size")
+    (let [two (-> (mock/request :post "/upload")
+                  (assoc :body (java.io.ByteArrayInputStream. (@#'testing/multipart-body [] {"a" {:filename "a" :bytes (byte-array 1)}
+                                                                                            "b" {:filename "b" :bytes (byte-array 1)}})))
+                  (assoc-in [:headers "content-type"] typed))]
+      (is (= [413 {:status 413 :wb/limit :files} false] (raw {:max-file-size 100 :max-files 1} two))
+          "two files under :max-files 1: the datum names :files"))
+    (let [field (-> (mock/request :post "/upload")
+                    (assoc :body (java.io.ByteArrayInputStream. (@#'testing/multipart-body {"caption" (apply str (repeat 101 "x"))} {})))
+                    (assoc-in [:headers "content-type"] typed))]
+      (is (= [413 {:status 413} false] (raw {:max-file-size 100} field))
+          "a text field past :max-file-size, which the parser applies to every part: a bare 413, never a file too large"))
+    (is (= [413 {:status 413} false] (raw {:max-file-size 5000} (unsized 1000 "multipart/form-data")))
+        "a body the parser cannot read: a bare 413, naming no bound it did not reach")))
 
 (deftest only-an-exact-multipart-form-data-type-gets-the-routes-larger-limit--a-lookalike-keeps-the-bases-and-parses-nothing
   (let [ran      (atom false)
@@ -1176,16 +1276,18 @@
   (let [attempt (fn [data] (try (wb/handler (config :routes [["/u" data]])) ::built
                                 (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
         h       (fn [_] {:status 200 :body ""})]
-    (doseq [bad [{} {:max-file-size 0} {:max-file-size 10 :store identity} {:max-file-size 10 :max-file-count -1} true]]
-      (is (= [(str "web-base: route /u has :wb/multipart " (pr-str bad) "; it takes [:max-body-bytes :max-file-count"
-                   " :max-file-size], positive numbers, :max-file-size required")
+    (doseq [bad [{} {:max-file-size 0} {:max-file-size 10 :store identity} {:max-file-size 10 :max-files -1}
+                 {:max-file-size 10 :max-files 0} {:max-file-size 10 :max-files 1.5} {:max-file-size 10 :max-file-count 2} true]]
+      (is (= [(str "web-base: route /u has :wb/multipart " (pr-str bad) "; it takes [:max-body-bytes :max-file-size"
+                   " :max-files], positive numbers, :max-file-size required")
               {:config-key [:routes "/u" :wb/multipart]}]
              (attempt {:wb/multipart bad :post h}))
           (str (pr-str bad) " is refused")))
     (is (= ["web-base: route /u sets :wb/multipart under :post; put it on the route's own data"
             {:config-key [:routes "/u" :post :wb/multipart]}]
            (attempt {:post {:wb/multipart {:max-file-size 10} :handler h}})))
-    (is (= ::built (attempt {:wb/multipart {:max-file-size 10} :post h})) "control")))
+    (is (= ::built (attempt {:wb/multipart {:max-file-size 10} :post h})) "control")
+    (is (= ::built (attempt {:wb/multipart {:max-file-size 10 :max-files 1} :post h})) "control: :max-files 1 builds")))
 
 (deftest a-health-probe-says-ok-or-unavailable-and-nothing-else--a-throw-is-a-logged-503
   (let [probe (fn [ready?] ((wb/handler (config :sessionless {"/health" (response/health ready?)})) (mock/request :get "/health")))

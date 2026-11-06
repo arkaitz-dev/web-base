@@ -2,7 +2,8 @@
   "Errors as data with three renderings (SPEC §9): a full page, a fragment for
   an htmx swap, or plain text when the client does not accept HTML. A datum is
   `{:status n}` plus optional `:title` and `:detail` strings; a coercion
-  failure adds `:wb/coercion`, the humanized explanation as data. The base's
+  failure adds `:wb/coercion`, the humanized explanation as data, and a 413 names
+  the bound that refused it under `:wb/limit` — `:file-size`, `:files` or `:body`. The base's
   own datums carry a status and structured data, never prose — it knows no
   language (SPEC §14); words come from the host's `:error-layout`, which
   receives the request and with it whatever the host put there.
@@ -125,7 +126,7 @@
         (when lost
           (log/info (str "request body not received: " lost " → " status)
                     {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
-        {:status status})
+        (select-keys body [:status :wb/limit]))
 
       ::error
       (dissoc data :type)

@@ -56,7 +56,7 @@
            [java.time Instant]
            [java.time.format DateTimeFormatter]
            [java.util Locale]
-           [org.apache.commons.fileupload2.core FileUploadException]))
+           [org.apache.commons.fileupload2.core FileUploadByteCountLimitException FileUploadException]))
 
 (def subject-present?
   "The stock gate predicate."
@@ -347,27 +347,51 @@
                   (str prefix "…")
                   uri))))))
 
-(defn- too-large! [^Throwable e]
-  (if (security/body-failure e)
-    (throw e)
-    (error/throw! {:status 413})))
+(defn- file-part?
+  "Whether a multipart part sent under `filename` carries a file: it has a name, which the
+  part a browser sends for a file input left empty does not. What `uploads` answers and
+  what `:max-files` counts."
+  [filename]
+  (not (str/blank? filename)))
 
-(def ^:private multipart-keys #{:max-file-size :max-file-count :max-body-bytes})
+(defn- file-too-large?
+  "Whether `e` is the parser's refusal of a file past `:max-file-size`. The parser applies
+  that bound to every part, so a text field past it is refused the same way, and is no
+  file too large."
+  [^Throwable e]
+  (some #(and (instance? FileUploadByteCountLimitException %)
+              (file-part? (.getFileName ^FileUploadByteCountLimitException %)))
+        (take-while some? (iterate #(.getCause ^Throwable %) e))))
+
+(defn- too-large!
+  "The 413 a refused upload is answered with, naming under `:wb/limit` the bound that
+  fired, so the page can tell the person which one to fix: `:file-size`, `:files`, or
+  `:body` for the body's own limit, which `error` renders from the body's failure. A
+  part the parser refused for any other reason — a malformed body, a text field past
+  `:max-file-size` — stays a bare 413."
+  [^Throwable e]
+  (cond
+    (security/body-failure e)             (throw e)
+    (= ::too-many-files (:type (ex-data e))) (error/throw! {:status 413 :wb/limit :files})
+    (file-too-large? e)                   (error/throw! {:status 413 :wb/limit :file-size})
+    :else                                 (error/throw! {:status 413})))
+
+(def ^:private multipart-keys #{:max-file-size :max-files :max-body-bytes})
 
 (defn- multipart-spec
   "`(fn [request] spec)`: the `:wb/multipart` spec of the route a `multipart/form-data`
   request is for, or nil. Only declared routes parse a multipart body — to disk, and
   before CSRF has judged the request, since the token is one of its fields — so an
   anonymous upload to any other path is never written anywhere. Each spec is checked at
-  construction: `:max-file-size` required, `:max-file-count` and `:max-body-bytes`
-  optional, positive, no other key, and never under one method, where a match would not
-  see it. The body limit of a declared route is its `:max-body-bytes`, or its file size
+  construction: `:max-file-size` required, `:max-files` and `:max-body-bytes` optional,
+  positive, no other key, and never under one method, where a match would not see it.
+  `:max-file-count`, which counted every part, is refused like any other (since 0.22.0). The body limit of a declared route is its `:max-body-bytes`, or its file size
   plus the base's own limit, for the fields beside the file."
   [router default-limit]
   (doseq [[path data] (r/routes router)
           :let [spec (:wb/multipart data)]]
     (when-not (or (nil? spec) (and (map? spec) (every? multipart-keys (keys spec)) (pos-int? (:max-file-size spec))
-                   (every? #(or (nil? (get spec %)) (pos-int? (get spec %))) [:max-file-count :max-body-bytes])))
+                   (every? #(or (nil? (get spec %)) (pos-int? (get spec %))) [:max-files :max-body-bytes])))
       (throw (ex-info (str "web-base: route " path " has :wb/multipart " (pr-str spec) "; it takes "
                            (pr-str (vec (sort multipart-keys))) ", positive numbers, :max-file-size required")
                       {:config-key [:routes path :wb/multipart]})))
@@ -385,14 +409,26 @@
   "A multipart store writing each file to a temporary file of its own, noted in
   `created` so the request can delete it when it ends. Ring's own store keeps them for
   an hour, and the parse runs before CSRF or any gate has judged the request, so an
-  anonymous POST to a declared route would leave its upload on disk that long."
-  [created]
-  (fn [item]
-    (let [file (File/createTempFile "wb-upload-" nil)]
-      (swap! created conj file)
-      (io/copy (:stream item) file)
-      (-> (select-keys item [:filename :content-type])
-          (assoc :tempfile file :size (.length file))))))
+  anonymous POST to a declared route would leave its upload on disk that long.
+
+  A part with no file name — the one a browser sends for a file input left empty — is no
+  file (`file-part?`) and is written nowhere: `uploads` leaves it out, and a body of
+  thousands of them would otherwise be thousands of temporary files before CSRF runs.
+  With `max-files`, the file past that many is refused before anything of it is written,
+  so the disk holds at most `max-files` files of a request."
+  [created max-files]
+  (let [files (volatile! 0)]
+    (fn [item]
+      (if-not (file-part? (:filename item))
+        (select-keys item [:filename :content-type])
+        (do
+          (when (and max-files (< max-files (vswap! files inc)))
+            (throw (ex-info "web-base: more files than the route's :max-files" {:type ::too-many-files :max-files max-files})))
+          (let [file (File/createTempFile "wb-upload-" nil)]
+            (swap! created conj file)
+            (io/copy (:stream item) file)
+            (-> (select-keys item [:filename :content-type])
+                (assoc :tempfile file :size (.length file)))))))))
 
 (defn- delete-all! [created]
   (doseq [^File file @created]
@@ -401,8 +437,9 @@
 
 (defn- wrap-multipart
   "Parses the multipart body of a request whose route declared `:wb/multipart`, with its
-  limits, into `:multipart-params` and `:params`, where CSRF then reads its token. A part
-  too large, too many, or a body past the route's limit is the host's 413 page; a body
+  limits, into `:multipart-params` and `:params`, where CSRF then reads its token. A file
+  too large, too many files, or a body past the route's limit is the host's 413 page,
+  its datum naming the bound under `:wb/limit`; a body
   the client broke off answers as the base's body limit does. Uploaded files live for
   the request: they are deleted once the response is returned, so a handler moves or
   copies what it keeps before answering, and never answers with the file itself."
@@ -411,12 +448,12 @@
                (fn [{::keys [spec created] :as request}]
                  (try {::parsed (multipart/multipart-params-request
                                  (dissoc request ::spec ::created)
-                                 (assoc (select-keys spec [:max-file-size :max-file-count])
-                                        :store (request-store created)))}
-                      ;; What Ring's own middleware answers 413 for: a part or body past
-                      ;; its limit (FileUploadException) and its own refusals, "Max file
-                      ;; count exceeded" among them, which it throws as ex-info. The body's
-                      ;; own failures, read through this parse, keep their status.
+                                 (assoc (select-keys spec [:max-file-size])
+                                        :store (request-store created (:max-files spec))))}
+                      ;; A part past its size or anything the parser cannot read
+                      ;; (FileUploadException), and the store's own count, thrown as
+                      ;; ex-info. The body's own failures, read through this parse, keep
+                      ;; their status.
                       (catch FileUploadException e (too-large! e))
                       (catch clojure.lang.ExceptionInfo e (too-large! e)))))]
     (fn [request]
@@ -783,8 +820,7 @@
   OPTIONS the field is Ring's `:params` — the query, as a browser sends them; on any
   other method the body's, urlencoded or multipart alike, and the query's only when the
   body does not carry it (since 0.20.0). It never
-  trims and never coerces. A multi-select reads `(get-in request [:params k])` itself: a
-  string for one choice, a vector for several, nil for none — in Ring's own order.
+  trims and never coerces. A multi-select reads `params`, every value as a vector.
 
   With `not-found` (since 0.19.0), an absent field answers `not-found` and every other
   shape answers as above, so a host tells \"not sent\" from \"sent wrong\" — an optional
@@ -796,6 +832,18 @@
      (if (contains? fields k)
        (let [v (get fields k)] (when (string? v) v))
        not-found))))
+
+(defn params
+  "Field `k`'s values, always a vector of strings: `[]` when absent, one string for a
+  field sent once, each in order for one sent several times — a multi-select, a list a
+  script posts — with any file under that name left out (since 0.22.0). Read from where
+  `param` reads: the query on a GET, HEAD or OPTIONS; the body on any other method, and
+  the query only when the body does not carry the field."
+  [request k]
+  (let [v (get (fields request) k)]
+    (cond (string? v)     [v]
+          (sequential? v) (filterv string? v)
+          :else           [])))
 
 (defn- file-name
   "The last segment of the name a part was sent with — a browser on another system may
@@ -819,11 +867,19 @@
   [request field]
   (let [parts (get-in request [:multipart-params field])]
     (vec (for [{:keys [filename content-type tempfile size]} (if (map? parts) [parts] (filter map? parts))
-               :when (and tempfile (not (str/blank? filename)))]
+               :when (and tempfile (file-part? filename))]
            {:filename     (file-name filename)
             :content-type (or (not-empty content-type) "application/octet-stream")
             :tempfile     tempfile
             :size         size}))))
+
+(defn upload
+  "The one file the multipart field `field` carries, as `uploads` answers it, or nil when
+  it carries none or several (since 0.22.0): for a form with one file input, where a
+  second file is a request the host refuses rather than one whose first it keeps."
+  [request field]
+  (let [files (uploads request field)]
+    (when (= 1 (count files)) (first files))))
 
 (def path-for
   "`(path-for source route-name)`, `(path-for source route-name params)`,

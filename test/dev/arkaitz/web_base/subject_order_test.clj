@@ -97,7 +97,7 @@
             "multipart 413"       [413 1]
             "gate refuses"        [403 1]
             "gate sends to login" [303 1]
-            "body limit 413"      [413 0]
+            "body limit 413"      [413 1]
             "sessionless"         [200 0]}
            {"page signed in"      (counted #(one b :get "/page"))
             "page anonymous"      (counted #(one anon :get "/page"))
@@ -108,6 +108,7 @@
             "gate sends to login" (counted #(one anon :get "/priv"))
             "body limit 413"      (counted #(app (-> (mock/request :post "/post") (assoc :content-length 300000))))
             "sessionless"         (counted #(app (mock/request :get "/health")))})
+        ;; The declared-length 413 is rendered inside the session since 0.23.0: once, like the rest.
         "[status, calls]: once wherever the session runs, never before it")
     (testing "unchanged by the reorder: the subject was outside the router either way"
     (let [throwing (wb/handler (config :subject-fn (fn [r] (swap! calls inc) (throw (ex-info "SECRET" {})))))

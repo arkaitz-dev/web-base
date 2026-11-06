@@ -513,8 +513,21 @@
           (update response :headers dissoc "Last-Modified")
           response)))))
 
-(defn- asset-handler [options]
-  (revalidated (unchanged-exactly (dated (ring/create-resource-handler options)))))
+(defn- refusing-unread
+  "`asset`, except that its answer to a request whose declared body the limit refused
+  is that refusal, rendered by `render`: an asset path never reaches the session layers
+  the host's page is rendered inside, so it keeps the page it had before 0.23.0. The
+  asset's own stream, never sent, is closed."
+  [asset render]
+  (fn [request]
+    (when-let [response (asset request)]
+      (if-let [datum (::security/declared-over request)]
+        (do (when (instance? java.io.Closeable (:body response)) (.close ^java.io.Closeable (:body response)))
+            (render datum request))
+        response))))
+
+(defn- asset-handler [options render]
+  (refusing-unread (revalidated (unchanged-exactly (dated (ring/create-resource-handler options)))) render))
 
 (defn- with-assets
   "Assets first — the base's `/wb/` before any other, so nothing can shadow the base's
@@ -522,15 +535,15 @@
   routes, then its `:static`, then `app` for everything else. Only the assets answer
   conditional GETs with a 304: the resource handlers emit `Last-Modified` and nothing
   else honoured it, so every page load re-sent htmx whole. Every asset is revalidated on
-  each load (`revalidated`)."
-  [assets static sessionless app]
+  each load (`revalidated`). `render` answers an asset request the body limit refused."
+  [assets static sessionless render app]
   (apply ring/routes
-         (remove nil? [(asset-handler base-asset-options)
+         (remove nil? [(asset-handler base-asset-options render)
                        (when (seq assets)
-                         (apply ring/routes (map asset-handler assets)))
+                         (apply ring/routes (map #(asset-handler % render) assets)))
                        sessionless
                        (when static
-                         (asset-handler (merge {:path "/"} static)))
+                         (asset-handler (merge {:path "/"} static) render))
                        app])))
 
 (defn- other-origin?
@@ -764,6 +777,10 @@
     (-> (ring/ring-handler router (error/default-handler render-error))
         (cond-> csrf? (security/wrap-csrf render-error))
         (wrap-multipart multipart-for render-error)
+        ;; Just inside i18n, outside multipart and CSRF: a body the limit refused for
+        ;; its declared length is the host's 413 page, with the session, subject and
+        ;; locale, and nothing that would read it or judge it runs (since 0.23.0).
+        (security/wrap-declared-over render-error)
         (cond-> i18n (i18n/wrap i18n))
         params/wrap-params
         ;; Just inside the session it reads, and outside everything else: a `:locale-fn`
@@ -775,11 +792,14 @@
         ;; base's rendered 500, not a raw exception at the adapter. Outside i18n, so it
         ;; renders without a negotiated locale.
         ((:wrap (error/middleware bare-error)))
-        (->> (with-assets assets static (sessionless-handler sessionless bare-error)))
+        (->> (with-assets assets static (sessionless-handler sessionless bare-error) bare-error))
         ;; Outside the assets and the sessionless routes, so no path reads a body the
         ;; limit has not seen. A body read past it throws the 413 datum wherever it is
-        ;; read, and the error boundary around the reader renders it.
+        ;; read, and the error boundary around the reader renders it. A declared length
+        ;; past it is answered here only on a sessionless path; any other request goes
+        ;; on with an empty body to `wrap-declared-over`.
         (security/wrap-body-limit #(or (:max-body-bytes (multipart-for %)) body-limit)
+                                  (comp some? (sessionless-finder (or sessionless {})) :uri)
                                   (sessionless-renderer sessionless bare-error))
         (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)

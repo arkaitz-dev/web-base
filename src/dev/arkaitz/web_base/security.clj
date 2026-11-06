@@ -185,17 +185,40 @@
 
 (defn wrap-body-limit
   "Refuses a request body larger than `(limit-for request)` bytes with a 413 whose datum
-  says `:wb/limit :body`: at once, unread, when its declared length says so; otherwise as
-  it is read, whoever reads it. `render` answers the refusal made here, before anything
-  else runs."
-  [handler limit-for render]
+  says `:wb/limit :body`. A body read past the limit throws that datum wherever it is
+  read, whoever reads it. A body whose declared length is already past it is never read:
+  - a request `refuse-here?` names — a sessionless path, which has no session layers
+    inside to render through — is answered here, at once, by `render`;
+  - every other one goes on with the datum under `::declared-over` and an empty body in
+    place of the client's, so nothing on the way reads those bytes, and
+    `wrap-declared-over`, inside the session, subject and locale, answers it with the
+    host's own error page (since 0.23.0)."
+  [handler limit-for refuse-here? render]
   (fn [request]
     (let [limit    (limit-for request)
           declared (or (:content-length request)
-                       (some-> (get-in request [:headers "content-length"]) parse-long))]
-      (if (and declared (< limit declared))
-        (render {:status 413 :wb/limit :body} request)
-        (handler (cond-> request (:body request) (update :body limited limit)))))))
+                       (some-> (get-in request [:headers "content-length"]) parse-long))
+          datum    {:status 413 :wb/limit :body}]
+      (cond
+        (not (and declared (< limit declared)))
+        (handler (cond-> request (:body request) (update :body limited limit)))
+
+        (refuse-here? request)
+        (render datum request)
+
+        :else
+        (handler (assoc request ::declared-over datum :body (java.io.ByteArrayInputStream. (byte-array 0))))))))
+
+(defn wrap-declared-over
+  "Answers a request `wrap-body-limit` marked as refused unread with `(render datum
+  request)` instead of `handler`, so nothing inside it — a multipart parse, CSRF, the
+  route — runs for that body. Inside the session, subject and locale, the page is the
+  host's own."
+  [handler render]
+  (fn [request]
+    (if-let [datum (::declared-over request)]
+      (render datum request)
+      (handler request))))
 
 (defn- forwarded
   "The entry `hops` from the right of a comma-separated forwarded header, trimmed, or nil

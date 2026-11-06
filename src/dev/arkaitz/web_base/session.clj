@@ -171,11 +171,11 @@
   the ordinary login — so a host's store must accept `delete-session` with
   nil.
 
-  The CSRF token does not follow the rotation: the new session holds a token minted
-  for it in this request, or none (`security/rotate-token`). A response rendered
-  through the base — a login page — shows that fresh token; a redirect leaves the new
-  session without one until the next page. Copying the old session into `new-session`
-  is fine, its token is dropped: whoever fixed the old session knew it."
+  The CSRF token does not follow the rotation: the new session always holds a fresh
+  one (`security/rotate-token`), the only place a token is born (since 0.21.0). A
+  response rendered through the base — a login page — shows it; after a redirect the
+  next page does. Copying the old session into `new-session` is fine, its token is
+  dropped: whoever fixed the old session knew it."
   [response new-session]
   (when-not (map? new-session)
     (throw (ex-info "web-base: rotate needs the new session as a map; nil would delete the session"

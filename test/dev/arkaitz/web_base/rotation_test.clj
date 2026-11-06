@@ -2,7 +2,13 @@
   "A response that rotates the session, through the whole stack with CSRF on — which no
   earlier test ran: every login in the suite redirected or answered a plain string. The
   rule under test is `security/rotated-session`'s: the new session holds the token
-  minted for it in this request, or none, and never one from before the rotation.
+  minted for it in this request, or a fresh one, and never one from before the rotation.
+
+  Since 0.21.0 an anonymous session holds no token — a token is born only at a
+  rotation — so the session every test starts from has signed in once already, and the
+  rotation under test is the second: a step-up or a sign-in as someone else, whose
+  pre-rotation token whoever fixed the session may know, as they once knew a
+  pre-login one.
 
   Every observation reads the memory store the stack writes to, and every token is
   proved by posting it, never by comparing it with itself."
@@ -90,12 +96,18 @@
                         (mock/header "X-CSRF-Token" token)))))
 
 (defn- signed-in-page
-  "`[handler sessions old-sid old-token]` after GETting the form a visitor signs in from."
+  "`[handler sessions old-sid old-token]` after a first sign-in — an anonymous POST the
+  browser vouches for as same-origin — and GETting the form the next rotation starts
+  from, which renders the token that sign-in stored."
   []
   (let [sessions (atom {})
         handler  (app sessions)
-        page     (handler (mock/request :get "/form"))]
-    [handler sessions (sid page) (testing/csrf-token page)]))
+        old-sid  (sid (handler (mock/header (mock/request :post "/login-plain") "Sec-Fetch-Site" "same-origin")))
+        page     (handler (-> (mock/request :get "/form") (mock/header "Cookie" (str "ring-session=" old-sid))))
+        old      (testing/csrf-token page)]
+    (is (and (some? old) (= old (get-in @sessions [old-sid token-key])))
+        "witness: the first sign-in stored a token and the form renders it")
+    [handler sessions old-sid old]))
 
 (deftest a-login-that-renders-a-page-gives-it-the-rotated-sessions-fresh-token
   (let [[handler sessions old-sid old] (signed-in-page)
@@ -112,7 +124,7 @@
     (is (= 200 (post handler new-sid fresh "/post")) "so the form posts")
     (is (= 403 (post handler new-sid old "/post")) "while the pre-login token is refused in the new session")))
 
-(deftest a-login-that-copies-the-old-session-and-redirects-carries-no-pre-login-token-over
+(deftest a-login-that-copies-the-old-session-and-redirects-carries-no-pre-rotation-token-over
   ;; The shape the README showed: the old session, and with it its token, copied into the
   ;; new one. Whoever fixed the pre-login session knew that token.
   (let [[handler sessions old-sid old] (signed-in-page)
@@ -121,11 +133,14 @@
                               (mock/header "X-CSRF-Token" old)))
         new-sid  (sid response)]
     (is (= [303 "ann"] [(:status response) (get-in @sessions [new-sid :user])]) "precondition: signed in, redirected")
-    (is (not (contains? (get @sessions new-sid) token-key)) "the rotated session holds no token at all")
-    (is (= 403 (post handler new-sid old "/post")) "so the pre-login token is refused there")
-    (let [page (handler (-> (mock/request :get "/form") (mock/header "Cookie" (str "ring-session=" new-sid))))]
-      (is (= 200 (post handler new-sid (testing/csrf-token page) "/post"))
-          "and the first page after it mints one that works"))))
+    ;; Since 0.21.0 a redirect's rotation stores a fresh token instead of none: a rotation
+    ;; is the only place a token is born.
+    (let [stored (get-in @sessions [new-sid token-key])]
+      (is (and (some? stored) (not= old stored)) "the rotated session holds a fresh token, not the pre-rotation one")
+      (is (= 403 (post handler new-sid old "/post")) "so the pre-rotation token is refused there")
+      (let [page (handler (-> (mock/request :get "/form") (mock/header "Cookie" (str "ring-session=" new-sid))))]
+        (is (= stored (testing/csrf-token page)) "the first page after it renders the token the rotation stored")
+        (is (= 200 (post handler new-sid stored "/post")) "and that token posts")))))
 
 (deftest a-login-rendered-outside-the-base-is-logged-and-its-session-gets-a-token-it-never-showed
   (let [[handler sessions old-sid old] (signed-in-page)]

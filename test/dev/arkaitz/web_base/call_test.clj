@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest is testing]]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.security :as security]
+            [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.testing :as wt])
   (:import [clojure.lang ExceptionInfo]
            [java.util Locale]))
@@ -143,11 +144,15 @@
                                                                :ct   (:content-type r)
                                                                :p    (wb/param r "name")})})}]
                          ["/plain" {:get  (fn [r] {:status 200 :body [:form (security/csrf-field r)]})
-                                    :post (fn [_] {:status 200 :body "plain"})}]]}))
+                                    :post (fn [_] {:status 200 :body "plain"})}]
+                         ["/login" {:post (fn [_] (session/rotate {:status 303 :headers {"Location" "/plain"} :body ""} {:user "ann"}))}]]}))
 
 (deftest multipart?-sends-a-fileless-form-as-multipart
   (let [h    (mp-app)
-        post (fn [path opts] (let [b (wt/visit (wt/browser h) :get path)
+        ;; Signed in, so the token is what CSRF reads: an anonymous POST is judged by its
+        ;; origin since 0.21.0, and the unseen token below would not be refused.
+        post (fn [path opts] (let [b (-> (wt/browser h) (wt/visit :post "/login") (wt/visit :get path))
+                                   _ (is (string? (:token b)) "witness: signed in and holding the form's token")
                                    r (:response (wt/visit b :post path {"name" "ada"} opts))]
                                [(:status r) (when (= 200 (:status r)) (edn/read-string (:body r)))]))]
     (is (= [200 {:mp nil :form {"name" "ada"} :ct "application/x-www-form-urlencoded; charset=UTF-8" :p "ada"}] (post "/up" {}))

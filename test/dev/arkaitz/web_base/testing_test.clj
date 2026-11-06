@@ -101,19 +101,23 @@
   (let [app    (wb/handler {:routes  [["/" {:wb/layouts [shell/page]
                                             ;; htmx and no form: the token is the shell's alone.
                                             :get  (fn [_] {:status 200 :body [:button {:hx-post "/"} "go"]})
-                                            :post (fn [_] {:status 200 :body "posted"})}]]
+                                            :post (fn [_] {:status 200 :body "posted"})}]
+                                      ;; A token is born only when the session rotates (since 0.21.0).
+                                      ["/login" {:post (fn [_] (session/rotate {:status 200 :body "in"} {:user "ann"}))}]]
                             :session {:key KEY}})
-        r      (app (mock/request :get "/"))
+        login  (app (mock/header (mock/request :post "/login") "Sec-Fetch-Site" "same-origin"))
+        _      (is (= 200 (:status login)) "witness: the sign-in passed")
+        r      (app (testing/with-cookies (mock/request :get "/") login))
         t      (testing/csrf-token r)
         oracle (second (re-find #"hx-headers:inherited=\"\{&quot;X-CSRF-Token&quot;:&quot;([^&]+)&quot;\}\"" (:body r)))]
     (is (nil? (re-find #"__anti-forgery-token" (:body r))) "witness: the fixture renders no hidden field")
     (is (and (string? oracle) (re-matches #"[A-Za-z0-9+/]{80}" oracle)) "the shell embedded a token (independent regex) — an htmx page must carry one")
     (is (= oracle t) "csrf-token reads the shell's real token whole")
     (is (= [200 "posted"]
-           (let [out (app (-> (mock/request :post "/") (testing/with-cookies r) (assoc-in [:headers "x-csrf-token"] t)))]
+           (let [out (app (-> (mock/request :post "/") (testing/with-cookies login) (assoc-in [:headers "x-csrf-token"] t)))]
              [(:status out) (:body out)]))
         "and wrap-csrf accepts it")
-    (is (= 403 (:status (app (-> (mock/request :post "/") (testing/with-cookies r) (assoc-in [:headers "x-csrf-token"] "nope")))))
+    (is (= 403 (:status (app (-> (mock/request :post "/") (testing/with-cookies login) (assoc-in [:headers "x-csrf-token"] "nope")))))
         "control: a wrong token is refused")))
 
 (deftest fragment-adds-exactly-the-header-the-classifier-reads--and-nothing-else
@@ -174,6 +178,16 @@
     {:log log
      :app (fn [r] (swap! log conj [(:request-method r) (:uri r) (get-in r [:headers "cookie"])]) (app r))}))
 
+(defn- signed-in
+  "A browser over `app` after a sign-in and a GET of the form page, holding the token the
+  sign-in's rotation stored: since 0.21.0 an anonymous session holds none, so a test of
+  the token path must sign in first."
+  [app]
+  (let [b (-> (testing/browser app) (testing/visit :post "/login") (testing/visit :get "/form"))]
+    (is (and (string? (:token b)) (re-find #":user \"ann\"" (:body (:response (testing/visit b :get "/me")))))
+        "witness: signed in, and the form page gave the browser a token")
+    b))
+
 (defn- set-cookie-of [response]
   (let [v (some (fn [[k v]] (when (= "set-cookie" (str/lower-case (str k))) v)) (:headers response))]
     (cond (nil? v) [] (string? v) [v] :else (vec v))))
@@ -196,7 +210,7 @@
 (deftest a-cookie-set-again-replaces-and-a-max-age-zero-deletion-forgets
   (let [{:keys [app log]} (browser-app)
         sent #(nth (last @log) 2)
-        b    (-> (testing/browser app) (testing/visit :get "/form")
+        b    (-> (testing/browser app) (testing/visit :post "/login")
                  (testing/visit :get "/set-a?v=1") (testing/visit :get "/set-a?v=2") (testing/visit :get "/form"))]
     (is (str/includes? (sent) "a=2") "the second value was sent")
     (is (not (str/includes? (sent) "a=1")) "and the first was replaced, not kept beside it")
@@ -206,15 +220,19 @@
       (is (str/includes? (sent) "ring-session=") "and only that cookie")
       (is (not (contains? (:jar b) "a")) "the jar has no entry for it"))))
 
-(deftest a-post-with-no-token-throws-before-sending--and-a-wrong-token-is-the-403-it-replaces
+(deftest an-anonymous-post-goes-as-the-sites-own-page-sends-it--and-a-signed-in-one-needs-its-token
+  ;; Since 0.21.0 an anonymous session holds no token and is vouched for by the browser's
+  ;; origin headers, so `visit` sends them and no longer throws for want of a token.
   (let [{:keys [app log]} (browser-app)
-        e (try (testing/visit (testing/browser app) :post "/echo" {:x "1"}) nil
-               (catch clojure.lang.ExceptionInfo e e))]
-    (is (re-find #"no CSRF token" (str (ex-message e))) "a POST with no token known throws, naming why")
-    (is (= {:path "/echo"} (ex-data e)))
-    (is (= [] @log) "before anything was sent"))
+        ok (:response (testing/visit (testing/browser app) :post "/echo" {:x "1"}))]
+    (is (= [[:post "/echo"]] (mapv #(subvec % 0 2) @log)) "witness: one POST was sent")
+    (is (= [200 {"x" "1"}] [(:status ok) (:form (edn/read-string (:body ok)))])
+        "an anonymous POST with no token known passes, carrying no token field")
+    (is (= 403 (:status (:response (testing/visit (testing/browser app) :post "/echo" {:x "1"}
+                                                  {:headers {"sec-fetch-site" "cross-site"}}))))
+        "control: the same POST declared cross-site is refused — the origin headers visit sends are what let it through"))
   (let [{:keys [app]} (browser-app)
-        b (testing/visit (testing/browser app) :get "/form")]
+        b (signed-in app)]
     (is (= 403 (:status (:response (testing/visit (assoc b :token "wrong") :post "/echo" {:x "1"}))))
         "control: CSRF is on, so a wrong token is refused — the oracle below bites")
     (let [ok (:response (testing/visit b :post "/echo" {:x "1"}))]
@@ -223,10 +241,10 @@
 
 (deftest after-login-the-token-is-the-new-one--the-stale-one-is-refused
   (let [{:keys [app]} (browser-app)
-        b  (testing/visit (testing/browser app) :get "/form")
+        b  (signed-in app)
         t1 (:token b)
-        b  (testing/visit b :post "/login")]
-    (is (string? t1) "witness: the first page carried a token")
+        b  (testing/visit b :post "/login-as" {:who "bob"})]
+    (is (re-find #":user \"bob\"" (:body (:response b))) "witness: the second sign-in rotated the session to bob")
     (is (= 403 (:status (:response (testing/visit (assoc b :token t1) :post "/echo" {:x "1"}))))
         "the pre-login token is refused once the session was rotated — why the docstring says GET first")
     (let [b  (testing/visit b :get "/form")
@@ -275,7 +293,7 @@
 
 (deftest htmx-sends-the-header-token-and-the-fragment-headers--remote-addr--and-the-old-browser-is-unchanged
   (let [{:keys [app]} (browser-app)
-        b (testing/visit (testing/browser app) :get "/form")]
+        b (signed-in app)]
     (is (= "<p>posted</p>" (:body (:response (testing/visit b :post "/frag" {} {:htmx? true}))))
         "as htmx: the fragment, not the shell")
     (is (str/starts-with? (:body (:response (testing/visit b :post "/frag"))) "<!DOCTYPE html>")
@@ -296,7 +314,7 @@
 
 (deftest visit-with-follow-false-answers-the-first-response--updates-the-jar--and-only-false-turns-following-off
   (let [{:keys [app log]} (browser-app)
-        b0 (testing/visit (testing/browser app) :get "/form")
+        b0 (signed-in app)
         n  (count @log)
         b1 (testing/visit b0 :post "/login" nil {:follow? false})
         r1 (:response b1)]
@@ -380,7 +398,7 @@
         b (testing/visit (testing/browser app) :get "/r3?kept=1")]
     (is (= "qs:kept=1" (:body (:response b))) "control: no params leaves the path's query alone"))
   (let [{:keys [app]} (browser-app)
-        b  (testing/visit (testing/browser app) :get "/form")
+        b  (signed-in app)
         b' (testing/visit b :post "/echo?kept=1" {"x" "1"})]
     (is (= [{"kept" "1"} {"x" "1" "__anti-forgery-token" (:token b)} "/echo?kept=1"]
            [(:query (edn/read-string (:body (:response b')))) (:form (edn/read-string (:body (:response b'))))
@@ -389,7 +407,7 @@
 
 (deftest put-patch-and-delete-carry-the-token-exactly-as-a-post-does
   (let [{:keys [app log]} (browser-app)
-        b (testing/visit (testing/browser app) :get "/form")]
+        b (signed-in app)]
     (is (string? (:token b)) "witness: the form page gave the browser a token")
     (doseq [method [:put :patch :delete]]
       (is (= 403 (:status (:response (testing/visit (assoc b :token "wrong") method "/echo" {:x "1"} {:htmx? true}))))
@@ -415,14 +433,15 @@
                [(ex-message e) (ex-data e)])
             (str method " without htmx throws: no browser form can send it"))
         (is (= [] @log) (str method ": before anything was sent")))
-      (let [e (try (testing/visit (testing/browser app) method "/echo" {:x "1"} {:htmx? true}) nil
-                   (catch clojure.lang.ExceptionInfo e e))]
-        (is (= [(str "web-base: a " ({:put "PUT" :patch "PATCH" :delete "DELETE"} method) " to /echo with no CSRF token"
-                     " — GET a page that carries one first")
-                {:path "/echo"}]
-               [(ex-message e) (ex-data e)])
-            (str method " with no token known throws, naming why"))
-        (is (= [] @log) (str method ": before anything was sent"))))))
+      ;; By design since 0.21.0: with no token known the swap is sent as the site's own page
+      ;; sends it, and an anonymous session passes by its origin.
+      (let [r (:response (testing/visit (testing/browser app) method "/echo" {:x "1"} {:htmx? true}))]
+        (is (= [200 {:form (if (= :delete method) {} {"x" "1"}) :query (if (= :delete method) {"x" "1"} {})
+                     :hdr nil :addr "127.0.0.1" :method method}]
+               [(:status r) (edn/read-string (:body r))])
+            (str method " with no token known is sent anonymously, with no token header"))
+        (is (= [method "/echo"] (subvec (last @log) 0 2)) (str method ": and was sent once"))
+        (is (= 1 (count @log)) (str method ": only once"))))))
 
 ;; A chain of every redirect status `visit` follows, ending on a page whose locale the
 ;; real i18n layer negotiates: what reaches a handler is recorded per hop, by the literal
@@ -477,7 +496,7 @@
         expected (fn [h] [(str "web-base: visit writes the " h " header itself — pass the jar, the token or"
                                " {:htmx? true} instead of setting it")
                           {:path "/echo" :header h} 0])
-        b (testing/visit (testing/browser app) :get "/form")]
+        b (signed-in app)]
     (is (= owned (into #{"host" "cookie" "content-type" "content-length" (str/lower-case security/csrf-header)}
                        (keys htmx/fragment-headers)))
         "witness: the list below is every header visit writes, read from where visit reads it")

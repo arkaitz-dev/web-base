@@ -9,6 +9,7 @@
             [clojure.tools.logging.test :as lt]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.security :as security]
+            [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.testing :as testing]
             [ring.middleware.session.memory :as memory]
             [ring.mock.request :as mock])
@@ -17,17 +18,22 @@
 
 (defn- app []
   (wb/handler {:session {:store (memory/memory-store)}
-               :routes  [["/f" {:get (fn [r] {:status 200 :body [:form (security/csrf-field r)]})}]
+               :routes  [["/login" {:post (fn [_] (session/rotate {:status 200 :body "in"} {}))}]
+                         ["/f" {:get (fn [r] {:status 200 :body [:form (security/csrf-field r)]})}]
                          ["/p" {:post (fn [_] {:status 200 :body "posted"})}]
                          ["/m" {:wb/multipart {:max-file-size 1024}
                                 :post (fn [_] {:status 200 :body "posted"})}]]}))
 
 (defn- established
-  "`[handler sid token]` after GETting a page that renders the token."
+  "`[handler sid token]` after a sign-in and GETting a page that renders the token: since
+  0.21.0 a token is born only when the session rotates, and an anonymous session's POST is
+  judged by its origin, never by a field."
   []
   (let [h    (app)
-        page (h (mock/request :get "/f"))]
-    [h (get (testing/cookies page) "ring-session") (testing/csrf-token page)]))
+        sid  (get (testing/cookies (h (mock/header (mock/request :post "/login") "Sec-Fetch-Site" "same-origin")))
+                  "ring-session")
+        page (h (mock/header (mock/request :get "/f") "Cookie" (str "ring-session=" sid)))]
+    [h sid (testing/csrf-token page)]))
 
 (defn- urlencoded [sid fields]
   (-> (mock/request :post "/p")

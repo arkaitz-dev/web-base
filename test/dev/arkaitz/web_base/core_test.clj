@@ -2,7 +2,8 @@
   "The assembled handler, end to end: the middleware order is the product and
   these are its observable consequences. Literals are the same shapes the
   unit tests pin, copied, never required from those namespaces."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn :as edn]
+            [clojure.test :refer [deftest is testing]]
             [clojure.tools.logging.test :as lt]
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.response :as response]
@@ -58,6 +59,12 @@
          more))
 
 (defn- id-of [response] (get-in response [:headers "X-Request-Id"]))
+
+(def ^:private vouched-login
+  "An anonymous POST to `/login` as a browser sends it from the site's own page: since
+  0.21.0 a token is born only when the session rotates, and a session with no token
+  passes CSRF by its origin."
+  (mock/header (mock/request :post "/login") "Sec-Fetch-Site" "same-origin"))
 
 (defn- error-headers [response]
   (merge SEC ERR-HTML {"X-Request-Id" (id-of response)}))
@@ -326,8 +333,8 @@
 
 (deftest assembled-csrf-refuses-unsafe-without-token-and-admits-header-or-form-field
   (let [app    (wb/handler (config))
-        t      (app (mock/request :get "/token"))
-        token  (:body t)
+        t      (app vouched-login)
+        token  (:body (app (testing/with-cookies (mock/request :get "/token") t)))
         with   #(testing/with-cookies % t)]
     (is (re-matches #"[A-Za-z0-9+/]{80}" (str token)) "ring-anti-forgery 1.4.0's token shape: 60 random bytes, base64 unpadded")
     (let [r (app (mock/request :post "/post"))]
@@ -397,11 +404,10 @@
     (is (= (page 404 (frag 404)) (:body (app (mock/request :get "/nope")))) "and the error page has no lang")))
 
 (deftest static-serving-host-assets-and-the-base-wb-mount-takes-precedence-over-a-host-file
-  ;; CSRF on: a GET that renders the token mints a session cookie, so the
-  ;; absence of Set-Cookie on an asset is measured against a stack that
-  ;; demonstrably sets one.
+  ;; A sign-in mints a session cookie, so the absence of Set-Cookie on an asset is
+  ;; measured against a stack that demonstrably sets one.
   (let [app (wb/handler (config))]
-    (is (some? (get-in (app (mock/request :get "/token")) [:headers "Set-Cookie"])) "control: a routed GET that renders the token does mint a session cookie")
+    (is (some? (get-in (app vouched-login) [:headers "Set-Cookie"])) "control: a routed sign-in does mint a session cookie")
     (let [r (app (mock/request :get "/host.txt"))]
       (is (= [200 "HOST-ASSET\n" "text/plain"] [(:status r) (slurp (:body r)) (get-in r [:headers "Content-Type"])]) "the host's asset")
       (is (= SEC (select-keys (:headers r) (keys SEC))) "with the security headers")
@@ -506,10 +512,12 @@
                  (delete-session [_ _] nil))
         app    (wb/handler (config :session {:store store}))
         cookie #(get-in % [:headers "Set-Cookie"])]
-    (let [r (app (mock/request :get "/token"))]
-      (is (= [1 true] [@writes (some? (cookie r))]) "control: a page that renders the token writes one session"))
+    (let [r (app vouched-login)]
+      (is (= [1 true] [@writes (some? (cookie r))]) "control: a sign-in writes one session"))
     (reset! writes 0)
     (doseq [[label path] [["a route that never reads the token" "/me"]
+                          ;; By design since 0.21.0: an anonymous session is never given a token.
+                          ["a page that asks for the token" "/token"]
                           ["the gate's redirect to the login" "/priv"]
                           ["the default 404" "/nope"]]]
       (let [r (app (mock/request :get path))]
@@ -643,7 +651,7 @@
 
 (deftest a-session-that-cannot-be-written-and-a-subject-fn-that-throws-are-the-bases-500-too
   (let [writing (wb/handler (config :session {:store (store-that-throws :write)}))
-        r       (writing (-> (mock/request :get "/token") (mock/header "Accept" "text/plain")))]
+        r       (writing (-> vouched-login (mock/header "Accept" "text/plain")))]
     (is (= [500 "500"] [(:status r) (:body r)]) "a write that fails on the way out"))
   (let [subject (wb/handler (config :subject-fn (fn [_] (throw (ex-info "SECRET subject failure" {})))))
         r       (subject (-> (mock/request :get "/me") (mock/header "Accept" "text/plain")))]
@@ -782,13 +790,20 @@
     (is (= [200 nil] [(:status anonymous) (cache-of anonymous)])
         "an anonymous page that read no token and wrote no session is left cacheable")
     (let [b      (testing/visit (testing/browser app) :get "/token")
-          _      (is (= "no-store" (cache-of (:response b))) "a page that read the CSRF token is somebody's own")
-          b      (testing/visit (assoc b :token (:body (:response b))) :post "/login")
+          _      (is (= [200 nil nil] [(:status (:response b)) (:body (:response b)) (cache-of (:response b))])
+                     "by design since 0.21.0: an anonymous page that asks for the token gets none and stays cacheable")
+          b      (testing/visit b :post "/login")
           signed (:response b)
-          b      (testing/visit b :get "/me")]
+          b      (testing/visit b :get "/me")
+          me     (edn/read-string (:body (:response b)))]
       (is (= [200 "no-store"] [(:status signed) (cache-of signed)]) "the login that rotated the session")
-      (is (= "{:user \"ann\"}" (:body (:response b))) "witness: the browser is signed in")
-      (is (= "no-store" (cache-of (:response b))) "and a signed-in page is not cached"))))
+      (is (= {:user "ann"} (dissoc me :ring.middleware.anti-forgery/anti-forgery-token)) "witness: the browser is signed in")
+      (is (string? (:ring.middleware.anti-forgery/anti-forgery-token me)) "witness: and its rotated session holds a token")
+      (is (= "no-store" (cache-of (:response b))) "and a signed-in page is not cached")
+      (let [token (testing/visit b :get "/token")]
+        (is (= [(:ring.middleware.anti-forgery/anti-forgery-token me) "no-store"]
+               [(:body (:response token)) (cache-of (:response token))])
+            "a signed-in page that read the CSRF token is somebody's own")))))
 
 (deftest a-sessionless-prefix-answers-its-subtree-before-the-session--an-exact-path-and-a-longer-prefix-win
   (let [seen (atom [])
@@ -992,6 +1007,9 @@
 
 ;; --- multipart, per route ---------------------------------------------------------------
 
+(def ^:private upload-login
+  ["/login" {:post (fn [_] (session/rotate {:status 303 :headers {"Location" "/form"} :body ""} {:user "ann"}))}])
+
 (defn- upload-app [spec]
   (wb/handler (config :routes [["/form" {:wb/layouts [(fn [{:keys [content request]}] [:main content (security/csrf-field request)])]
                                          :get (fn [_] {:status 200 :body [:p "form"]})}]
@@ -999,11 +1017,20 @@
                                            :post (fn [r] (let [{:keys [filename size tempfile]} (get-in r [:multipart-params "photo"])]
                                                            {:status 200 :body (pr-str [filename size (some-> tempfile .exists)
                                                                                        (get-in r [:multipart-params "caption"])])}))}]
-                               ["/plain" {:post (fn [_] {:status 200 :body "plain"})}]])))
+                               ["/plain" {:post (fn [_] {:status 200 :body "plain"})}]
+                               upload-login])))
+
+(defn- signed-in-form
+  "A browser over `app` signed in and on the form, holding the token its CSRF field
+  rendered: a session with no token passes CSRF by its origin since 0.21.0, so the token
+  path these uploads exercise needs a signed-in one."
+  [app]
+  (let [b (-> (testing/browser app) (testing/visit :post "/login"))]
+    (is (and (= "/form" (:path b)) (string? (:token b))) "witness: signed in, on the form, holding its token")
+    b))
 
 (defn- upload [app path files]
-  (let [b (testing/visit (testing/browser app) :get "/form")]
-    (:response (testing/visit b :post path {"caption" "hi"} {:files files}))))
+  (:response (testing/visit (signed-in-form app) :post path {"caption" "hi"} {:files files})))
 
 (defn- photo [n] {"photo" {:filename "a.png" :content-type "image/png" :bytes (byte-array n (byte 7))}})
 
@@ -1059,15 +1086,16 @@
                                                            :post (fn [r] (let [{:keys [tempfile]} (get-in r [:multipart-params "photo"])]
                                                                            (reset! seen-file tempfile)
                                                                            {:status 200 :body (str (.exists ^java.io.File tempfile))}))}]
-                                               ["/plain" {:post (fn [_] {:status 200 :body "plain"})}]]))
+                                               ["/plain" {:post (fn [_] {:status 200 :body "plain"})}]
+                                               upload-login]))
         gone?     (fn [{:keys [files]}] (mapv #(.exists ^java.io.File %) files))]
     (let [[r [req]] (spying-on-uploads #(upload app "/upload" (photo 1000)))]
       (is (= [200 "true"] [(:status r) (:body r)]) "200: the handler saw its file on disk")
       (is (= [[@seen-file] [true]] [(:files req) (:existed req)]) "200: one file was written, the one the handler saw")
       (is (= [false] (gone? req)) (str "200: none survives the response: " (mapv str (:files req)))))
-    (let [[r [req]] (spying-on-uploads #(:response (testing/visit (assoc (testing/browser app) :token "bogus") :post "/upload"
+    (let [[r [req]] (spying-on-uploads #(:response (testing/visit (assoc (signed-in-form app) :token "bogus") :post "/upload"
                                                                    {"caption" "hi"} {:files (photo 10)})))]
-      (is (= 403 (:status r)) "403: an anonymous POST with no valid token is refused")
+      (is (= 403 (:status r)) "403: a signed-in POST with no valid token is refused")
       (is (= [1 [true]] [(count (:files req)) (:existed req)]) "403: its upload was written while it was judged")
       (is (= [false] (gone? req)) "403: and is gone once the refusal is sent"))
     (let [[r [req]] (spying-on-uploads #(upload app "/upload" (array-map "a" {:filename "a" :bytes (byte-array 10)}
@@ -1115,7 +1143,8 @@
                                                :routes [["/form" {:wb/layouts [(fn [{:keys [content request]}] [:main content (security/csrf-field request)])]
                                                                   :get (fn [_] {:status 200 :body [:p "form"]})}]
                                                         ["/upload" {:wb/multipart spec
-                                                                    :post (fn [r] (reset! ran true) {:status 200 :body (str (:content-length r))})}]])))
+                                                                    :post (fn [r] (reset! ran true) {:status 200 :body (str (:content-length r))})}]
+                                                        upload-login])))
         send    (fn [spec] (reset! ran false) (let [r (upload (app-of spec) "/upload" (photo 1000))] [(:status r) (:body r) @ran]))
         [_ b _] (send {:max-file-size 100000})
         B       (parse-long b)]

@@ -195,7 +195,7 @@
   (let [[uri qs] (split-path path)
         cookie   (when (seq jar) (str/join "; " (map (fn [[k v]] (str k "=" v)) (sort jar))))
         fields   (when (and (unsafe? method) (not (params-in-query? method)))
-                   (cond-> (vec params) (not htmx?) (conj ["__anti-forgery-token" token])))
+                   (cond-> (vec params) (and token (not htmx?)) (conj ["__anti-forgery-token" token])))
         [bytes type] (cond (and fields (or (seq files) multipart?))
                            [(multipart-body fields files) (str "multipart/form-data; boundary=" boundary)]
                            fields
@@ -207,7 +207,10 @@
              :server-port    80
              :remote-addr    (or remote-addr "127.0.0.1")
              :protocol       "HTTP/1.1"
-             :headers        (cond-> (assoc headers "host" "localhost")
+             ;; As a browser sends it from the site's own page: what the base checks a
+             ;; session with no token by. A test of a refusal overrides these.
+             :headers        (cond-> (merge (when (unsafe? method) {"sec-fetch-site" "same-origin" "origin" "http://localhost"})
+                                            (assoc headers "host" "localhost"))
                                cookie (assoc "cookie" cookie)
                                htmx?  (merge htmx/fragment-headers)
                                (and htmx? token) (assoc (lower security/csrf-header) token))}
@@ -295,10 +298,12 @@
   - A POST, PUT, PATCH or DELETE carries the CSRF token of the last page that had one,
     as the hidden field a form would send — or, with `{:htmx? true}`, as the header the
     shell makes htmx send, with the headers of a swap. A PUT, PATCH or DELETE without
-    `{:htmx? true}` throws, because no browser form can send one. One with no token
-    known throws: a 403 that looked like the application's fault is the failure it
-    replaces. After a login the session, and with it the token, is new — GET a page
-    before the next one.
+    `{:htmx? true}` throws, because no browser form can send one. Every one also sends
+    `Sec-Fetch-Site: same-origin` and `Origin: http://localhost`, as a browser does from
+    the site's own page: an anonymous session holds no token and is checked by those
+    (since 0.21.0), and a test of a refusal overrides them through `:headers`. After a
+    login the session holds a token the browser has not seen — GET a page before the
+    next one.
   - A 301, 302 or 303 is followed as a GET through the same jar, up to ten times; an
     `HX-Redirect` is left in the response for the test to read, as htmx would act on it
     and a server-side test cannot.
@@ -336,10 +341,6 @@
      (throw (ex-info (str "web-base: {:files …} or {:multipart? true} goes in the body of a POST, PUT or PATCH, and a "
                           (.toUpperCase (name method) Locale/ROOT) " to " path " has none")
                      {:path path :method method})))
-   (when (and (unsafe? method) (not (:token b)))
-     (throw (ex-info (str "web-base: a " (.toUpperCase (name method) Locale/ROOT) " to " path
-                          " with no CSRF token — GET a page that carries one first")
-                     {:path path})))
    (let [opts (assoc opts :headers (extra-headers path (:headers opts)))]
      (loop [b b method method path (with-params method path params) params params hops 0]
        (let [response ((:handler b) (request-of b method path params opts))

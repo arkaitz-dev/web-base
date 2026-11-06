@@ -20,6 +20,11 @@
                                              :session-key KEY
                                              :secure?     false})))
 
+(def ^:private same-origin
+  "What a browser adds to a POST from the site's own page: since web-base 0.21.0 an
+  anonymous session holds no CSRF token and is judged by it."
+  {"sec-fetch-site" "same-origin"})
+
 (defn- get* [app path & headers]
   (app (reduce (fn [r [k v]] (mock/header r k v)) (mock/request :get path) (partition 2 headers))))
 
@@ -29,8 +34,15 @@
     (is (= 200 (:status home)))
     (is (str/starts-with? (:body home) "<!DOCTYPE html>\n<html lang=\"es\">") "the shell, in the default language")
     (is (str/includes? (:body home) "<div id=\"app\"><nav class=\"tabs\">") "the tabs section inside it")
-    (is (str/includes? (:body home) "hx-headers:inherited=") "the CSRF token for htmx")
-    (is (seq (testing/cookies home)) "the first visit mints the session that holds the CSRF token")
+    ;; By design since web-base 0.21.0: a token is born at sign-in, so an anonymous page
+    ;; carries none and writes no session.
+    (is (not (str/includes? (:body home) "hx-headers:inherited=")) "no CSRF token for htmx on an anonymous page")
+    (is (empty? (testing/cookies home)) "and the first visit mints no session")
+    (let [signed (testing/visit (testing/visit (testing/browser app) :post "/login" {"name" "ada"}) :get "/")]
+      (is (str/includes? (:body (:response signed)) (str "hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;"
+                                                         (:token signed) "&quot;}\""))
+          "control: a signed-in home page carries its session's token for htmx")
+      (is (string? (:token signed)) "witness: and that token is one"))
     (is (str/includes? (:body home) "hx-swap=\"outerHTML\" hx-target=\"#app\"")
         "the tab buttons replace #app whole: the section answers with the wrapper itself")
     (let [swap (get* app "/tabs/search" "HX-Request" "true")]
@@ -50,7 +62,8 @@
                ", headers " (select-keys (:headers r) ["Location" "HX-Redirect" "Vary" "Cache-Control"]))))
     (let [form  (testing/visit (testing/browser app) :get "/login")
           login (testing/visit form :post "/login" {"name" "ada"} {:follow? false})]
-      (is (some? (testing/csrf-token (:response form))) "the login form carries the csrf field")
+      (is (nil? (testing/csrf-token (:response form)))
+          "by design since web-base 0.21.0: the anonymous login form carries no csrf field, its POST is judged by origin")
       (is (= [303 "/private"] [(:status (:response login)) (get-in (:response login) [:headers "Location"])])
           "login redirects to the private page")
       ;; That the id rotated is proved below over a store with ids: under the
@@ -84,23 +97,27 @@
     (is (str/starts-with? (:body (get* app "/" "Accept-Language" "en")) "<!DOCTYPE html>\n<html lang=\"en\">") "Accept-Language")
     (is (str/includes? (:body (get* app "/" "Accept-Language" "en")) ">Tasks<") "translated tabs")
     (let [home   (testing/visit (testing/browser app) :get "/")
-          _      (is (some? (testing/csrf-token (:response home))) "the home page carries the token in the shell's <body>")
-          _      (is (seq (testing/cookies (:response home))) "and minted the session")
+          ;; By design since web-base 0.21.0: an anonymous page carries no token and writes no session.
+          _      (is (nil? (testing/csrf-token (:response home))) "the anonymous home page carries no token")
+          _      (is (empty? (testing/cookies (:response home))) "and minted no session")
           switch (testing/visit home :post "/lang" {"locale" "en"} {:follow? false})
           after  (testing/visit switch :get "/" nil {:headers {"accept-language" "es"}})]
       (is (= 303 (:status (:response switch))))
+      (is (seq (testing/cookies (:response switch))) "the switch wrote the session that holds the choice")
       (is (str/starts-with? (:body (:response after)) "<!DOCTYPE html>\n<html lang=\"en\">") "the session's choice beats the header"))))
 
 (deftest todos-round-trip-through-htmx-with-the-csrf-header
+  ;; Signed in, so the header token is what CSRF reads: an anonymous swap is judged by its
+  ;; origin since web-base 0.21.0.
   (let [app    (app)
-        form   (testing/visit (testing/browser app) :get "/login")
+        form   (-> (testing/browser app) (testing/visit :post "/login" {"name" "ada"}) (testing/visit :get "/"))
+        _      (is (string? (:token form)) "witness: signed in, holding the token the home page carries")
         add    (:response (testing/visit form :post "/todos" {"title" "dos"} {:htmx? true}))]
     (is (= 200 (:status add)))
     (is (str/starts-with? (:body add) "<div id=\"todos\">") "the fragment htmx swaps in")
     (is (and (str/includes? (:body add) "uno") (str/includes? (:body add) "dos")))
-    ;; By hand: `visit` refuses to send an unsafe request without the token, on purpose.
-    (is (= 403 (:status (app (-> (mock/request :post "/todos" {"title" "tres"}) (testing/with-cookies (:response form)) testing/fragment))))
-        "without the token: the base's 403")))
+    (is (= 403 (:status (:response (testing/visit (assoc form :token nil) :post "/todos" {"title" "tres"} {:htmx? true}))))
+        "the same signed-in swap without the token: the base's 403")))
 
 (deftest boom-is-the-page-on-a-history-restore-and-the-500-fragment-on-a-swap
   ;; htmx sends HX-Request on a history restore too, with HX-Request-Type
@@ -127,12 +144,15 @@
                                                                     :session-key KEY
                                                                     :secure?     false})
                                     :session {:store (memory/memory-store sessions)}))
-        form     (get* app "/login")
-        before   (get (testing/cookies form) "ring-session")
-        login    (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" (testing/csrf-token form)})
-                          (testing/with-cookies form)))
+        ;; An anonymous session to rotate: since web-base 0.21.0 a form page writes none,
+        ;; so the visitor picks a language first, which the demo keeps in the session.
+        anon     (app (reduce-kv mock/header (mock/request :post "/lang" {"locale" "en"}) same-origin))
+        before   (get (testing/cookies anon) "ring-session")
+        stored   (get @sessions before)
+        login    (app (-> (reduce-kv mock/header (mock/request :post "/login" {"name" "ada"}) same-origin)
+                          (testing/with-cookies anon)))
         after    (get (testing/cookies login) "ring-session")]
-    (is (string? before) "the form minted a session: it holds the CSRF token")
+    (is (and (string? before) (= {:locale "en"} stored)) "the language switch wrote an anonymous session, holding no token")
     (is (= 303 (:status login)) "login succeeded")
     (is (string? after) "login wrote a session cookie")
     (is (not= before after) "with a different id: the demo called session/rotate")

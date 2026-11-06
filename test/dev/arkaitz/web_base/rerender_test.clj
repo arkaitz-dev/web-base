@@ -89,9 +89,11 @@
   (let [got (atom nil) runs (atom 0)]
     {:got got :runs runs :app (app got runs)}))
 
-;; `/` answers a plain string, so it carries no token: a token comes from a page that
+;; A token is born only when the session rotates (since 0.21.0), so the browser signs in
+;; first; `/` answers a plain string and carries none, so a token comes from a page that
 ;; renders one. The form page is that page; reaching it costs one run, subtracted below.
-(defn- ready [app] (testing/visit (testing/browser app) :get "/things/1"))
+(defn- ready [app]
+  (testing/visit (testing/visit (testing/browser app) :post "/login" {"user" "visitor"}) :get "/things/1"))
 
 (deftest rerender-runs-the-targets-own-get-with-the-form-and-only-the-targets-params
   (let [{:keys [got runs app]} (fixture)
@@ -153,10 +155,8 @@
       (is (= 0 @runs))))
   (testing "nobody signed in gets the gate's own redirect to the login, with the re-rendered page as next"
     (let [{:keys [app]} (fixture)
-          b (ready app)
-          r (app (-> (mock/request :post "/save-admin")
-                     (mock/body {"__anti-forgery-token" (:token b)})
-                     (assoc-in [:headers "cookie"] (str/join "; " (map (fn [[k v]] (str k "=" v)) (:jar b))))))]
+          ;; Anonymous, so no token: the browser vouches for it as same-origin (since 0.21.0).
+          r (app (mock/header (mock/request :post "/save-admin") "Sec-Fetch-Site" "same-origin"))]
       (is (= [303 (str LOGIN "?next=%2Fadmin") "no-store" ""]
              [(:status r) (get-in r [:headers "Location"]) (get-in r [:headers "Cache-Control"]) (:body r)])))))
 

@@ -8,6 +8,7 @@
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.render :as render]
             [dev.arkaitz.web-base.security :as security]
+            [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.shell :as shell]
             [dev.arkaitz.web-base.testing :as testing]
             [hiccup2.core :as h]
@@ -58,10 +59,11 @@
 (def ^:private BODY-TOKEN "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok/ABC+123=&quot;}\">")
 
 (defn- token-request
-  "A request carrying a token and its own fresh read flag, as `wrap-csrf` builds one: a
-  flag shared between cases would make every later `true` vacuous."
+  "A request carrying a token its session holds and its own fresh read flag, as
+  `wrap-csrf` builds one for a signed-in visitor: a flag shared between cases would make
+  every later `true` vacuous."
   []
-  {:anti-forgery-token TOKEN ::security/csrf-used (volatile! false)})
+  {:anti-forgery-token TOKEN ::security/csrf-used (volatile! false) ::security/csrf-stored true})
 
 (defn- with-token [main] (str "<html>" HEAD-START ASSETS "</head>" BODY-TOKEN main "</body></html>"))
 
@@ -125,6 +127,12 @@
       (is (= (with-token "<main class=\"wb-main\"><span data-token=\"tok/ABC+123=\"></span></main>")
              (html {:request req :content read}))
           "a read by the content puts the token on <body> too: the session keeps it either way")))
+  (testing "an anonymous htmx page carries no token: its session holds none (since 0.21.0)"
+    (let [req (dissoc (token-request) ::security/csrf-stored)]
+      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+             (html {:request req :content [:button {:hx-post "/x"} "go"]}))
+          "no hx-headers on <body>, though the request carries the library's token")
+      (is (false? @(::security/csrf-used req)) "and nothing was read")))
   (testing "an htmx page under `:csrf false` carries no token, because there is none"
     (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
            (html {:request {} :content [:button {:hx-post "/x"} "go"]}))
@@ -132,7 +140,8 @@
   (testing "lang, nonce and token compose"
     (is (= (str "<html lang=\"es\">" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script></head>"
                 "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok&quot;}\"><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
-           (html {:request {:anti-forgery-token "tok" :wb/nonce "n1" :wb/locale "es" ::security/csrf-used (volatile! false)}
+           (html {:request {:anti-forgery-token "tok" :wb/nonce "n1" :wb/locale "es" ::security/csrf-used (volatile! false)
+                            ::security/csrf-stored true}
                   :content [:button {:hx-post "/x"} "go"]})))))
 
 (deftest works-as-the-outermost-route-layout-through-render-middleware
@@ -149,12 +158,22 @@
 
 (def ^:private KEY "AAAAAAAAAAAAAAAAAAAAAA==")
 
+(defn- sign-in
+  "The response to a sign-in to `app`: a POST the browser vouches for as same-origin,
+  since a token is born only when the session rotates."
+  [app]
+  (let [login (app (mock/header (mock/request :post "/login") "Sec-Fetch-Site" "same-origin"))]
+    (is (= 303 (:status login)) "witness: the sign-in passed CSRF and redirected")
+    (is (seq (testing/cookies login)) "witness: and set the session cookie")
+    login))
+
 (defn- app-with-shell []
   (wb/handler {:routes   [["/" {:wb/layouts [shell/page]
                                 :get  (fn [_] {:status 200 :body [:p "hi"]})}]
                           ["/hx" {:wb/layouts [shell/page]
                                   :get  (fn [_] {:status 200 :body [:button {:hx-post "/hx"} "go"]})
-                                  :post (fn [_] {:status 200 :body [:p "posted"]})}]]
+                                  :post (fn [_] {:status 200 :body [:p "posted"]})}]
+                          ["/login" {:post (fn [_] (session/rotate {:status 303 :headers {"Location" "/"} :body ""} {:user "ann"}))}]]
                :session  {:key KEY}
                :security {:csp "script-src 'nonce-{nonce}'"}}))
 
@@ -166,10 +185,11 @@
     (is (= 1 (count (re-seq #"nonce=\"" (:body r)))) "exactly one nonce attribute in the page")
     (is (str/starts-with? (:body r) "<!DOCTYPE html>\n<html><head>"))))
 
-(deftest a-formless-hx-free-page-writes-no-session-and-is-not-marked-private--the-same-app-does-both-for-an-htmx-page
+(deftest a-formless-hx-free-page-writes-no-session-and-is-not-marked-private--nor-does-an-anonymous-htmx-page--a-signed-in-one-is
   (let [app (app-with-shell)
         r   (app (mock/request :get "/"))
-        c   (app (mock/request :get "/hx"))]
+        a   (app (mock/request :get "/hx"))
+        c   (app (testing/with-cookies (mock/request :get "/hx") (sign-in app)))]
     (is (= 200 (:status r)))
     (is (str/ends-with? (:body r) "</head><body><main class=\"wb-main\"><p>hi</p></main></body></html>")
         "witness: the page rendered through the shell, with a bare <body>")
@@ -177,9 +197,15 @@
         (str "a formless, hx-free page set a session cookie: " (testing/header-values (:headers r) "Set-Cookie")))
     (is (nil? (testing/csrf-token r)) "and carries no token")
     (is (nil? (get-in r [:headers "Cache-Control"])) "nothing read the token, so the page is not marked private")
-    (testing "control: the same app, an htmx page"
+    (testing "an anonymous htmx page, by design since 0.21.0: its session holds no token to send"
+      (is (str/ends-with? (:body a) "</head><body><main class=\"wb-main\"><button hx-post=\"/hx\">go</button></main></body></html>")
+          "witness: the htmx page rendered, with a bare <body>")
+      (is (= [] (testing/header-values (:headers a) "Set-Cookie"))
+          (str "an anonymous htmx page set a session cookie: " (testing/header-values (:headers a) "Set-Cookie")))
+      (is (nil? (testing/csrf-token a)) "and carries no token")
+      (is (nil? (get-in a [:headers "Cache-Control"])) "nor is it marked private"))
+    (testing "control: the same app, the htmx page of a signed-in visitor"
       (let [token (testing/csrf-token c)]
-        (is (= ["ring-session"] (vec (keys (testing/cookies c)))) "the htmx page wrote the session")
         (is (= "no-store" (get-in c [:headers "Cache-Control"])))
         (is (and (string? token) (re-matches #"[A-Za-z0-9+/]{80}" token)))
         (is (str/includes? (:body c) (str "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;" token
@@ -187,16 +213,16 @@
 
 (deftest token-embedded-in-hx-headers-is-the-one-wrap-csrf-accepts--round-trip
   (let [app    (app-with-shell)
-        first* (app (mock/request :get "/hx"))
+        login  (sign-in app)
+        first* (app (testing/with-cookies (mock/request :get "/hx") login))
         token  (testing/csrf-token first*)
         post   (fn [base & headers] (let [r (reduce (fn [q [k v]] (mock/header q k v)) (mock/header base "HX-Request" "true") (partition 2 headers))
                                           out (app r)] [(:status out) (:body out)]))
         bare   (mock/request :post "/hx")
-        jarred (testing/with-cookies bare first*)
+        jarred (testing/with-cookies bare login)
         frag   "<div class=\"wb-error\" data-status=\"403\"><strong class=\"wb-error-status\">403</strong></div>"]
     (is (str/includes? (:body first*) "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;") "the shell put the token on <body>")
     (is (and (string? token) (= 80 (count token))) "the shell embedded the session's token (ring-anti-forgery 1.4.0: 60 random bytes, base64 unpadded)")
-    (is (seq (testing/cookies first*)) "the page minted the session cookie")
     (is (= [200 "<p>posted</p>"] (post jarred "X-CSRF-Token" token)) "the embedded token is accepted")
     (is (= [403 frag] (post jarred)) "without the header: refused")
     (is (= [403 frag] (post jarred "X-CSRF-Token" "nope")) "a wrong token: refused")

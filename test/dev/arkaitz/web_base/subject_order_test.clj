@@ -75,7 +75,8 @@
   (let [app  (wb/handler (config :error-layout who-layout))
         b    (signed-in app)
         anon (-> (wt/browser app) (wt/visit :get "/form"))]
-    (is (= [403 ""] ((juxt :status who) (one (assoc anon :token "bogus") :post "/post")))
+    ;; An anonymous session holds no token since 0.21.0, so its refusal is the origin's.
+    (is (= [403 ""] ((juxt :status who) (one anon :post "/post" nil {:headers {"sec-fetch-site" "cross-site"}})))
         "control: without a subject the layout prints nothing")
     (is (= [403 "ann"] ((juxt :status who) (one (assoc b :token "bogus") :post "/post")))
         "a refused CSRF token's page knows who asked")
@@ -131,8 +132,8 @@
     (let [app  (wb/handler (config))
           b    (signed-in app)
           anon (wt/browser app)]
-      ;; A plain route, not a page with a form: one that renders the CSRF field writes
-      ;; the session, and is uncached for that reason alone, whoever asks.
+      ;; A plain route, not a page with a form: a signed-in page that renders the CSRF
+      ;; field is uncached for that reason alone.
       (is (= ["no-store" nil] [(get-in (one b :get "/plain") [:headers "Cache-Control"])
                                (get-in (one anon :get "/plain") [:headers "Cache-Control"])])
           "a response for a subject is uncached; an anonymous one is not marked")

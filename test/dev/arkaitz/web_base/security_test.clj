@@ -167,16 +167,30 @@
   page is somebody's own and must not be cached."
   {:status 200 :headers {"Cache-Control" "no-store"} :body "x"})
 
+(defn- login
+  "A sign-in as the host writes it: the session rotated, into an empty one so the store
+  shows exactly what the rotation added."
+  [_]
+  (session/rotate {:status 200 :body "in"} {}))
+
+(def ^:private vouched
+  "An anonymous POST to `/login` as a browser sends it from the site's own page — the
+  only way a session with no token passes CSRF (since 0.21.0)."
+  (mock/header (mock/request :post "/login") "Sec-Fetch-Site" "same-origin"))
+
 (defn- csrf-app
   "A spy handler behind csrf behind the session over a memory store the test
-  can read. It reads the token through `csrf-token` while it runs, as a page that
-  renders a form does — which is what makes the token stick (`wrap-csrf`)."
+  can read. `/login` rotates the session, which is where a token is born; anything
+  else reads the token through `csrf-token` while it runs, as a page that renders a
+  form does."
   [sessions seen]
   (session/wrap (security/wrap-csrf (fn [r]
-                                      (security/csrf-token r)
-                                      ;; The dynamic var is bound only while the handler runs.
-                                      (reset! seen (assoc r ::bound (force anti-forgery/*anti-forgery-token*)))
-                                      {:status 200 :body "x"})
+                                      (if (= "/login" (:uri r))
+                                        (login r)
+                                        (do (security/csrf-token r)
+                                            ;; The dynamic var is bound only while the handler runs.
+                                            (reset! seen (assoc r ::bound (force anti-forgery/*anti-forgery-token*)))
+                                            {:status 200 :body "x"})))
                                     render-error)
                 {:store (memory/memory-store sessions)}))
 
@@ -188,18 +202,20 @@
 (defn- with-sid [request sid] (mock/header request "Cookie" (str "ring-session=" sid)))
 
 (defn- established
-  "`[app sessions sid token]` after one GET."
+  "`[app sessions sid token seen response]` after a sign-in and one GET with its
+  cookie: a token is born only when the session rotates (since 0.21.0)."
   []
   (let [sessions (atom {})
         seen     (atom nil)
         app      (csrf-app sessions seen)
-        response (app req)]
-    [app sessions (sid-of response) (security/csrf-token @seen) seen response]))
+        sid      (sid-of (app vouched))
+        response (app (with-sid req sid))]
+    [app sessions sid (security/csrf-token @seen) seen response]))
 
-(deftest csrf-get-issues-a-token-on-the-request-and-stores-that-same-token-in-the-session
+(deftest csrf-rotation-stores-a-token-and-a-get-reads-that-same-token-from-the-session
   (let [[app sessions sid t seen response] (established)]
     (is (= READ-TOKEN (update response :headers select-keys ["Cache-Control"])))
-    (is (some? sid) "a session cookie was issued")
+    (is (some? sid) "the sign-in issued a session cookie")
     (is (re-matches #"[A-Za-z0-9+/]{80}" (str t)) "ring-anti-forgery 1.4.0's token shape: 60 random bytes, base64 unpadded")
     (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token t}} @sessions) "the session holds the token and nothing else")
     (is (= t (:anti-forgery-token @seen) (::bound @seen)) "the accessor reads what the library bound")
@@ -238,9 +254,9 @@
     (is (= READ-TOKEN (app (mock/header post "X-CSRF-Token" t))) "control: the refusals did not erase the stored token")))
 
 (deftest csrf-form-field-passes-only-when-wrap-params-runs-before-csrf--and-the-field-is-the-one-csrf-field-renders
-  (let [[_ sessions sid t] (established)
+  (let [[_ sessions sid t seen] (established)
         store    (memory/memory-store sessions)
-        field    (second (security/csrf-field {:anti-forgery-token t}))
+        field    (second (security/csrf-field @seen))
         with     (session/wrap (params/wrap-params (security/wrap-csrf ok render-error)) {:store store})
         without  (session/wrap (security/wrap-csrf ok render-error) {:store store})
         posted   (fn [app body] (app (with-sid (mock/body (mock/request :post "/") body) sid)))]
@@ -261,61 +277,79 @@
           (str (name method) " with the token under the name csrf-header publishes")))))
 
 (deftest csrf-field-and-csrf-header-are-the-literal-shapes-forms-and-the-shell-rely-on
-  (is (= [:input {:type "hidden" :name "__anti-forgery-token" :value "T<&"}] (security/csrf-field {:anti-forgery-token "T<&"})))
+  (is (= [:input {:type "hidden" :name "__anti-forgery-token" :value "T<&"}]
+         (security/csrf-field {::security/csrf-stored true :anti-forgery-token "T<&"})))
   (is (= "<input name=\"__anti-forgery-token\" type=\"hidden\" value=\"T&lt;&amp;\">"
-         (render/html (security/csrf-field {:anti-forgery-token "T<&"})))
+         (render/html (security/csrf-field {::security/csrf-stored true :anti-forgery-token "T<&"})))
       "escaped once, by the renderer")
   (is (nil? (security/csrf-field {})) "no token, no field")
   (is (= "X-CSRF-Token" security/csrf-header)))
 
 (deftest csrf-under-the-cookie-store--the-token-survives-sealing-and-a-post-with-cookie-and-token-passes
   (let [seen  (atom nil)
-        app   (session/wrap (security/wrap-csrf (fn [r] (reset! seen r) (security/csrf-token r) {:status 200 :body "x"})
+        app   (session/wrap (security/wrap-csrf (fn [r]
+                                                  (if (= "/login" (:uri r))
+                                                    (login r)
+                                                    (do (reset! seen r) (security/csrf-token r) {:status 200 :body "x"})))
                                                 render-error)
                             {:key "AAECAwQFBgcICQoLDA0ODw=="})
-        first* (app req)
+        first* (app vouched)
         raw    (str (first (get-in first* [:headers "Set-Cookie"])))
+        _      (app (testing/with-cookies req first*))
         t      (security/csrf-token @seen)
         post   (testing/with-cookies (mock/request :post "/") first*)]
+    (is (some? t) "witness: the sealed session carries the token the rotation stored")
     (is (re-matches #"ring-session=[A-Za-z0-9%]+--[A-Za-z0-9%]+; Path=/; HttpOnly; SameSite=Lax; Secure" raw)
         (str "the cookie store sealed a session with the default attributes: " raw))
     (is (= READ-TOKEN (app (mock/header post "X-CSRF-Token" t))) "cookie + token passes, session not re-sealed")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app post)) "cookie without token")
     (is (= {:status 403 :headers HTML :body PAGE-403} (app (mock/header (mock/request :post "/") "X-CSRF-Token" t))) "token without cookie")))
 
-(deftest csrf-writes-a-token-into-the-session-only-for-a-request-that-used-it
+(deftest csrf-writes-a-token-into-the-session-only-when-the-session-rotates
+  ;; Since 0.21.0 a page that renders a form no longer mints a token for an anonymous
+  ;; visitor: that was one session row per crawler request.
   (let [sessions (atom {})
         reads    (fn [r] {:status 200 :body (str (security/csrf-token r))})
         ignores  (fn [_] {:status 200 :body "no form here"})
-        app      (fn [h] (session/wrap (security/wrap-csrf h render-error) {:store (memory/memory-store sessions)}))
+        app      (fn [h] (session/wrap (security/wrap-csrf (fn [r] (if (= "/login" (:uri r)) (login r) (h r))) render-error)
+                                       {:store (memory/memory-store sessions)}))
         quiet    ((app ignores) req)]
     (is (= [{} nil] [@sessions (get-in quiet [:headers "Set-Cookie"])])
         "an anonymous request that renders no token writes no session and sets no cookie")
+    (let [r ((app reads) req)]
+      (is (= [{} nil "" nil] [@sessions (get-in r [:headers "Set-Cookie"]) (:body r) (get-in r [:headers "Cache-Control"])])
+          "an anonymous request that asks for the token gets none, writes no session, sets no cookie, and is not private"))
     (let [loud (app reads)
-          r    (loud req)
-          sid  (sid-of r)]
-      (is (some? sid) "control: one that renders the token does get a session")
-      (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token (:body r)}} @sessions)
-          "holding exactly the token it rendered, so the form built with it will pass")
+          sid  (sid-of (loud vouched))
+          r    (loud (with-sid req sid))
+          t    (:body r)]
+      (is (some? sid) "control: a sign-in does get a session")
+      (is (= {sid {:ring.middleware.anti-forgery/anti-forgery-token t}} @sessions)
+          "holding exactly the token the next page rendered, so the form built with it will pass")
+      (is (re-matches #"[A-Za-z0-9+/]{80}" t) "and that is a token, not the empty answer of an anonymous read")
       (is (= {:status 200 :body "x"}
              ((session/wrap (security/wrap-csrf ok render-error) {:store (memory/memory-store sessions)})
-              (mock/header (with-sid (mock/request :post "/") sid) "X-CSRF-Token" (:body r))))
-          "and a POST carrying it passes"))
-    (let [both   (app (fn [r] (if (= "/form" (:uri r)) (reads r) (ignores r))))
-          before (count @sessions)]
-      (both (mock/request :get "/form"))
-      (is (= (inc before) (count @sessions)) "precondition: a request that used the token wrote one")
-      (is (nil? (get-in (both (mock/request :get "/plain")) [:headers "Set-Cookie"]))
-          "and the next anonymous request through the same middleware, using none, writes none — the flag is per request")
-      (is (= (inc before) (count @sessions)) "no session row either"))))
+              (mock/header (with-sid (mock/request :post "/") sid) "X-CSRF-Token" t)))
+          "and a POST carrying it passes")
+      (let [both (app (fn [r] (if (= "/form" (:uri r)) (reads r) (ignores r))))]
+        (is (= "no-store" (get-in (both (with-sid (mock/request :get "/form") sid)) [:headers "Cache-Control"]))
+            "precondition: a signed-in request that used the token is marked private")
+        (is (nil? (get-in (both (mock/request :get "/plain")) [:headers "Cache-Control"]))
+            "and the next anonymous request through the same middleware, using none, is not — the flag is per request")))))
 
 (deftest csrf-token-marks-only-a-request-that-carries-a-token-and-never-throws-on-a-bare-map
   (is (nil? (security/csrf-token {})) "nothing to read, nothing marked, no exception")
-  (is (= "T" (security/csrf-token {:anti-forgery-token "T"})) "a request built by hand, with no flag, still answers")
+  (is (nil? (security/csrf-token {:anti-forgery-token "T"}))
+      "by design since 0.21.0: a request built by hand, with no session holding the token, answers none")
+  (is (= "T" (security/csrf-token {::security/csrf-stored true :anti-forgery-token "T"})) "a session holding it answers it")
+  (is (= "F" (security/csrf-token {::security/csrf-fresh (volatile! "F") :anti-forgery-token "F"}))
+      "and so does a rotation minting one")
   (let [flag (volatile! false)]
-    (security/csrf-token {::security/csrf-used flag})
+    (security/csrf-token {::security/csrf-used flag ::security/csrf-stored true})
     (is (false? @flag) "no token on the request: the flag stays down")
     (security/csrf-token {::security/csrf-used flag :anti-forgery-token "T"})
+    (is (false? @flag) "a token on an anonymous request is not answered: the flag stays down")
+    (security/csrf-token {::security/csrf-used flag ::security/csrf-stored true :anti-forgery-token "T"})
     (is (true? @flag) "a token read: the flag is up")))
 
 (deftest hsts-max-age-in-milliseconds-is-refused--a-billion-seconds-is-the-edge

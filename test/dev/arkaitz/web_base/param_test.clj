@@ -54,7 +54,8 @@
 (def ^:private photo {"photo" {:filename "a.png" :content-type "image/png" :bytes (.getBytes "PNG" "UTF-8")}})
 
 (defn- observed
-  "`[status observation]` for one request from a browser holding the CSRF token."
+  "`[status observation]` for one request from a browser on the site's own page: anonymous,
+  so since 0.21.0 it holds no CSRF token and its unsafe requests pass by their origin."
   [method path params opts]
   (let [b        (wt/visit (wt/browser app) :get "/form")
         response (:response (wt/visit b method path params opts))]

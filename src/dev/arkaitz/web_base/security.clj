@@ -240,43 +240,50 @@
   (boolean (:recreate (meta (:session response)))))
 
 (defn- rotated-session
-  "The session a rotating response leaves behind: holding the token minted for it in
-  this request, or none — never one from before the rotation. A pre-login token is
-  known to whoever fixed the pre-login session, so carrying it over, whether the host
-  copied the old session into the new one or the library did, would hand them the
-  logged-in session's token."
+  "The session a rotating response leaves behind, holding a token of its own: the one
+  minted for it in this request, or a fresh one — never one from before the rotation.
+  A pre-login token is known to whoever fixed the pre-login session, so carrying it
+  over, whether the host copied the old session into the new one or the library did,
+  would hand them the logged-in session's token. A rotation is the only place a token is
+  born (since 0.21.0): a signed-in session always holds one, an anonymous one never does."
   [request response]
-  (let [minted (some-> (::csrf-fresh request) deref)
-        used?  (some-> (::csrf-used request) deref)
-        token  (or minted
-                   (when used?
-                     (log/error (str "a response that rotates the session rendered a CSRF token the new"
-                                     " session cannot keep — render it through the base, or redirect")
-                                {:request-id (:wb/request-id request) :uri (request-log/path-of request)})
-                     (fresh-token)))
-        session (:session response)]
-    (assoc response :session (if token (assoc session session-token-key token) (dissoc session session-token-key)))))
+  (let [minted (some-> (::csrf-fresh request) deref)]
+    (when (and (nil? minted) (some-> (::csrf-used request) deref))
+      (log/error (str "a response that rotates the session rendered a CSRF token the new"
+                      " session cannot keep — render it through the base, or redirect")
+                 {:request-id (:wb/request-id request) :uri (request-log/path-of request)}))
+    (assoc-in response [:session session-token-key] (or minted (fresh-token)))))
 
 (defn- lazy-session-strategy
   "ring-anti-forgery's own session strategy — the same token, the same constant-time
-  check — except that a token is written into the session only when the request used
-  it. The library's default writes one on every request that lacks it, so a health
-  probe, a JSON endpoint or a redirect each created a session: a row, with a
-  server-side store. Validation is untouched, so a token that was never written fails
-  closed like any other.
+  check — except that a token is born only when the session rotates: the token minted
+  for it by `rotate-token`, or a fresh one (`rotated-session`). The library's default
+  writes one on every request that lacks it, so a health probe, a JSON endpoint or a
+  redirect each created a session: a row, with a server-side store. Validation is
+  untouched, so a token that was never written fails closed like any other.
 
-  A response that rotates the session is the exception, whatever its body: its new
-  session gets the token minted for it by `rotate-token`, or none (`rotated-session`)."
+  A session that holds a token keeps it through a handler that answers a new session
+  map without it — a signed-in session never falls to the origin check — and loses it
+  only to a rotation or to `:session nil`, which ends the session. A request vouched for
+  by its origin (`from-this-origin?`) carries no token, and the library is told so by a
+  value only `wrap-csrf` can put there."
   []
   (let [inner (anti-forgery-session/session-strategy)]
     (reify strategy/Strategy
       (get-token [_ request] (strategy/get-token inner request))
-      (valid-token? [_ request token] (strategy/valid-token? inner request token))
+      (valid-token? [_ request token]
+        (if (identical? token ::origin-vouched)
+          (true? (::origin-vouched request))
+          (strategy/valid-token? inner request token)))
       (write-token [_ request response token]
-        (cond
-          (rotating? response)                 (rotated-session request response)
-          (some-> (::csrf-used request) deref) (strategy/write-token inner request response token)
-          :else                                response)))))
+        (let [stored (get-in request [:session session-token-key])]
+          (cond
+            (rotating? response) (rotated-session request response)
+            ;; A handler that writes a whole new session map would drop the token, and a
+            ;; signed-in session would fall to the origin check until its next sign-in.
+            (and stored (map? (:session response)) (not (contains? (:session response) session-token-key)))
+            (assoc-in response [:session session-token-key] stored)
+            :else response))))))
 
 (defn- request-token
   "ring-anti-forgery's own reading — the form field, multipart included, else the
@@ -286,27 +293,44 @@
   in any shape is never passed over for a header, so the token is the one the form sent."
   [request]
   (let [fields (merge (:form-params request) (:multipart-params request))]
-    (if (contains? fields "__anti-forgery-token")
+    (cond
+      (::origin-vouched request) ::origin-vouched
+      (contains? fields "__anti-forgery-token")
       (let [field (get fields "__anti-forgery-token")]
         (when (string? field) field))
+      :else
       (or (get-in request [:headers "x-csrf-token"])
           (get-in request [:headers "x-xsrf-token"])))))
 
-(defn wrap-csrf
-  "ring-anti-forgery inside the session: every request not GET/HEAD/OPTIONS
-  needs the session's token, read from the `__anti-forgery-token` form field
-  or the `X-CSRF-Token` header — which the shell makes htmx send on every
-  request (the library also honours `X-XSRF-Token`; the base documents one
-  name). A refusal is the base's own 403 datum, so an htmx swap receives a
-  fragment and a navigation a page.
+(defn- from-this-origin?
+  "Whether the browser says this request came from this site's own pages, for a session
+  that holds no token: `Sec-Fetch-Site` `same-origin` or `none` (typed, or a bookmark);
+  without it — a browser older than Safari 16.4 — an `Origin` that is this scheme and
+  this `Host`, as the browser wrote it, which an opaque `null` never is. `same-site` is
+  refused: a sibling subdomain is not this site. Neither header is no browser this can
+  vouch for, and is refused, so a proxy that strips them fails loudly rather than letting everything through. Behind a
+  proxy that ends TLS, `:scheme` is `https` only with `:proxy-hops`."
+  [request]
+  (let [{site "sec-fetch-site" origin "origin" host "host"} (:headers request)]
+    (cond site                                    (contains? #{"same-origin" "none"} site)
+          (and origin host)                       (= (lower origin) (str (name (:scheme request)) "://" (lower host)))
+          :else                                   false)))
 
-  **A token reaches the session only if the request used it** — through
-  `csrf-token` or `csrf-field`, which the shell calls for every page it renders,
-  and while the handler runs. A request that renders neither writes no session, so
-  an anonymous `/health`, a JSON answer or a redirect leaves no row behind. Reading
-  `:anti-forgery-token` or ring-anti-forgery's dynamic var directly, or reading the
-  token after the handler returned (a body built lazily later), mints a token that is
-  never stored: the form built with it earns a 403."
+(defn wrap-csrf
+  "ring-anti-forgery inside the session. Every request not GET/HEAD/OPTIONS is
+  checked, in one of two ways (since 0.21.0):
+  - a session that holds a token — every signed-in one — needs it, read from the
+    `__anti-forgery-token` form field or the `X-CSRF-Token` header, which the shell
+    makes htmx send (the library also honours `X-XSRF-Token`);
+  - a session that holds none — an anonymous visitor's, cart or not — needs the
+    browser to say the request came from this site's own pages (`from-this-origin?`).
+  A token is born only when the session rotates, at sign-in, so an anonymous page with
+  a form writes no session row: a crawler costs nothing. A refusal is the base's own
+  403 datum, so an htmx swap receives a fragment and a navigation a page.
+
+  Reading `:anti-forgery-token` or ring-anti-forgery's dynamic var directly, or reading
+  the token after the handler returned (a body built lazily later), gives a token that
+  is never stored: the form built with it earns a 403."
   [handler render-error]
   (let [protected (anti-forgery/wrap-anti-forgery
                    handler
@@ -318,7 +342,10 @@
     ;; A page that read the token is somebody's own, signed in or not.
     (fn [request]
       (let [used     (volatile! false)
-            response (protected (assoc request ::csrf-used used ::csrf-fresh (volatile! nil)))]
+            stored?  (some? (get-in request [:session session-token-key]))
+            response (protected (assoc request
+                                       ::csrf-used used ::csrf-fresh (volatile! nil) ::csrf-stored stored?
+                                       ::origin-vouched (and (not stored?) (from-this-origin? request))))]
         (cond-> response @used private)))))
 
 (defn- log-pre-rotation-read! [request]
@@ -358,12 +385,14 @@
 (def csrf-header "X-CSRF-Token")
 
 (defn csrf-token
-  "The request's token, for the host's own markup — and the read that makes it stick:
-  a token nobody read through here is not written into the session (`wrap-csrf`)."
+  "The request's token, for the host's own markup, when its session holds one or a
+  rotation is minting it; nil for an anonymous session, which `wrap-csrf` checks by
+  origin instead (since 0.21.0)."
   [request]
-  (when-let [token (:anti-forgery-token request)]
-    (some-> (::csrf-used request) (vreset! true))
-    token))
+  (when (or (::csrf-stored request) (some-> (::csrf-fresh request) deref))
+    (when-let [token (:anti-forgery-token request)]
+      (some-> (::csrf-used request) (vreset! true))
+      token)))
 
 (defn csrf-field
   "The hidden input a classic form needs; htmx requests carry the header

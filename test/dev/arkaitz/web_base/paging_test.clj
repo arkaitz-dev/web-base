@@ -108,3 +108,97 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"paging/paged takes a total from 0 and a size from 1"
                           (paging/paged {:query-params {}} total size identity))
         (str "total " (pr-str total) ", size " (pr-str size)))))
+
+;; --- keyset ------------------------------------------------------------------------
+
+(def ^:private ids (mapv #(format "a%02d" %) (range 1 26)))
+
+(defn- keyset-app
+  "A list of `ids` (the 25 unless given), ten to a page, read by position at `/items`.
+  `calls` records each fetch; `served` what `f` was given. A fetch asked with no key after
+  or before a cursor throws, as a host's query would: a missing clamp is a 500, never a
+  lucky redirect."
+  [calls served & [ids]]
+  (let [ids   (or ids (var-get #'ids))
+        fetch (fn [{:keys [direction key limit] :as asked}]
+                (swap! calls conj asked)
+                (when (and (not= :first direction) (nil? key))
+                  (throw (ex-info "fetch asked with no key" asked)))
+                (case direction
+                  :first  (vec (take limit ids))
+                  :after  (vec (take limit (rest (drop-while #(not= key %) ids))))
+                  :before (vec (take limit (reverse (take-while #(not= key %) ids))))))]
+    (wb/handler {:session {:store (memory/memory-store)}
+                 :csrf    false
+                 :routes  [["/items" {:handler (fn [r]
+                                                 (paging/keyset r {:size 10 :cursor identity
+                                                                   :decode (fn [c] (some #{c} ids)) :fetch fetch}
+                                                                (fn [page] (swap! served conj page)
+                                                                  {:status 200 :body "page"})))}]]})))
+
+(defn- keyset-get [query & [ids]]
+  (let [calls (atom []) served (atom [])
+        r     ((keyset-app calls served ids) (mock/request :get (str "/items" query)))]
+    [r @calls @served]))
+
+(defn- span [from to] (subvec ids (dec from) to))
+
+(deftest keyset-serves-each-page-by-position-with-its-neighbours-and-asks-one-row-more
+  (doseq [[query rows next previous asked]
+          [["" (span 1 10) "/items?after=a10" nil {:direction :first :key nil :limit 11}]
+           ["?after=a10" (span 11 20) "/items?after=a20" "/items?before=a11" {:direction :after :key "a10" :limit 11}]
+           ["?after=a15" (span 16 25) nil "/items?before=a16" {:direction :after :key "a15" :limit 11}]
+           ["?after=a20" (span 21 25) nil "/items?before=a21" {:direction :after :key "a20" :limit 11}]
+           ["?before=a21" (span 11 20) "/items?after=a20" "/items?before=a11" {:direction :before :key "a21" :limit 11}]]]
+    (let [[r calls served] (keyset-get query)]
+      (is (= [200 [asked]] [(:status r) calls]) (str (pr-str query) ": served, the fetch asked once for a page and one row more"))
+      (is (= [{:rows rows :next next :previous previous}] served)
+          (str (pr-str query) ": the rows in the list's order, and the neighbours that exist")))))
+
+(deftest keyset-serves-the-first-page-of-a-short-list-whole-with-no-neighbours--never-a-redirect
+  (doseq [[label list] [["empty" []] ["three rows" ["a01" "a02" "a03"]] ["exactly a page" (span 1 10)]]]
+    (let [[r calls served] (keyset-get "" list)]
+      (is (= [200 1 [{:rows list :next nil :previous nil}]] [(:status r) (count calls) served])
+          (str label ": the first page is served as it is — a redirect here would be to itself")))))
+
+(deftest keyset-lands-on-the-first-page-for-a-cursor-that-no-longer-leads-anywhere
+  (doseq [[query why fetched?]
+          [["?before=a11" "a before that reaches the start: the first page has one spelling" true]
+           ["?after=a25" "after the last row: nothing to show" true]
+           ["?before=a01" "before the first row: nothing to show" true]
+           ["?after=a99" "a cursor whose row is gone: never fetched" false]]]
+    (let [[r calls served] (keyset-get query)]
+      (is (= [303 "/items" [] fetched?] [(:status r) (get-in r [:headers "Location"]) served (boolean (seq calls))])
+          (str (pr-str query) ": " why))))
+  (let [[r _ _] (keyset-get "?after=a99&status=x")]
+    (is (= [303 "/items?status=x"] [(:status r) (get-in r [:headers "Location"])]) "the rest of the query kept"))
+  (let [[_ _ served] (keyset-get "?after=a10&status=x&tag=y")]
+    (is (= ["/items?status=x&tag=y&after=a20" "/items?status=x&tag=y&before=a11"] ((juxt :next :previous) (first served)))
+        "the neighbours keep the rest of the query, and only one cursor")))
+
+(deftest keyset-refuses-a-cursor-nobody-built-with-a-404-and-reads-nothing
+  (doseq [query ["?after=a10&before=a11" "?after=a10&after=a11" "?after=a%20b" "?after="
+                 (str "?after=" (apply str (repeat 129 "a"))) "?before=a/b"]]
+    (let [[r calls served] (keyset-get query)]
+      (is (= [404 [] []] [(:status r) calls served]) (str (pr-str (subs query 0 (min 30 (count query)))) " is a 404, nothing fetched"))))
+  (let [[r _ served] (keyset-get (str "?after=" (apply str (repeat 128 "a"))))]
+    (is (= [303 []] [(:status r) served]) "128 characters is a cursor's shape: read, and unknown, so the first page")))
+
+(deftest keyset-is-refused-on-a-sessionless-route-and-for-a-host-bug-in-its-options
+  (let [handler (wb/handler {:session     {:store (memory/memory-store)}
+                             :sessionless {"/s" (fn [r] (paging/keyset r {:size 10 :cursor identity :decode identity
+                                                                          :fetch (constantly [])}
+                                                                       (fn [_] {:status 200 :body "served"})))}
+                             :routes      []})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"a :sessionless route is answered before it is parsed"
+                          (paging/keyset {:uri "/s"} {:size 10 :cursor identity :decode identity :fetch (constantly [])} identity))
+        "witness: a request with no parsed query is refused, naming why")
+    (is (= 500 (:status (handler (mock/request :get "/s?after=a10")))) "so the stack answers the error, never the first page"))
+  (doseq [opts [{:size 0 :cursor identity :decode identity :fetch identity}
+                {:size nil :cursor identity :decode identity :fetch identity}
+                {:size 10 :cursor identity :decode identity}
+                {:size 10 :cursor "x" :decode identity :fetch identity}
+                {:size 10 :cursor identity :decode "x" :fetch identity}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"paging/keyset takes a :size from 1"
+                          (paging/keyset {:query-params {}} opts identity))
+        (pr-str opts))))

@@ -9,7 +9,7 @@
     → [/wb/ assets → sessionless routes → host static → ] error boundary → session → subject
     → params → i18n → multipart (declared routes only) → csrf
     → ring-handler
-        router, per matched route: error → gate → render → coercion → handler
+        router, per matched route: error → gate → render → coercion → guard → handler
         default handler: 404 / 405 / nil-handler 500
 
   Static assets answer before the session: a stylesheet fetch must not mint a
@@ -72,7 +72,7 @@
   person gets the page they were on with what they typed and why it was refused —
   without a redirect that loses both, and without the POST handler rebuilding the
   page it does not own. The page's own `:get` handler runs, compiled as the router
-  compiled it: its gate, coercion and layouts apply as for any GET of that path. The
+  compiled it: its gate, coercion, guard and layouts apply as for any GET of that path. The
   request keeps its session, subject, locale and CSRF token; its form, body and
   parameters are dropped, and `path`'s own path and query parameters take their
   place. Views read `(:wb/form request)`, whose shape is the host's.
@@ -515,12 +515,19 @@
 
 (defn- route-vector? [x] (and (vector? x) (string? (first x))))
 
+(def ^:private checks
+  "The route keys a route's endpoints are checked by: the middleware that asks each, and
+  its name in a refusal."
+  {:wb/gate  [::gate/gate "gate" "widen"]
+   :wb/guard [::gate/guard "guard" "drop"]})
+
 (defn- check-method-gates!
-  "A `:wb/gate` under a method of a route that has children is refused (since 0.16.0):
-  reitit merges a parent's method data into its children's endpoints, where a child's
-  handler or method gate replaces it — a child declaring nothing, `:get handler`, wipes
-  the parent's `:get` map whole — so a gate there could be widened by any route under it.
-  On a route with children the gate goes on the route's own data, where it composes."
+  "A `:wb/gate` or `:wb/guard` under a method of a route that has children is refused
+  (since 0.16.0, the guard since 0.22.0): reitit merges a parent's method data into its
+  children's endpoints, where a child's handler or method data replaces it — a child
+  declaring nothing, `:get handler`, wipes the parent's `:get` map whole — so a check
+  there could be dropped by any route under it. On a route with children it goes on the
+  route's own data, where it composes."
   [routes]
   (letfn [(walk [x]
             (cond
@@ -530,27 +537,29 @@
                     ;; Any sequence: reitit mounts children written as a list or made by
                     ;; `for`, and a check that saw vectors alone would miss them.
                     children (filter sequential? (if data (rest more) more))]
-                (when (and (seq children)
-                           (some #(some? (get-in data [% :wb/gate])) ring/http-methods))
-                  (throw (ex-info (str "web-base: route " path " declares :wb/gate under a method and has routes"
-                                       " under it, which could widen it — put the gate on the route's own data")
-                                  {:config-key [:routes] :path path})))
+                (when (seq children)
+                  (doseq [[k [_ noun harm]] (sort checks)
+                          :when (some #(some? (get-in data [% k])) ring/http-methods)]
+                    (throw (ex-info (str "web-base: route " path " declares " k " under a method and has routes"
+                                         " under it, which could " harm " it — put the " noun " on the route's own data")
+                                    {:config-key [:routes] :path path}))))
                 (run! walk children))
               (sequential? x) (run! walk x)))]
     (walk routes)))
 
 (defn- check-gates-wired!
-  "Every endpoint whose data carries a `:wb/gate` has the gate's middleware: a route's
-  `:middleware ^:replace […]` replaces the base's four, the gate's among them, and the
-  gate would be declared and never asked (since 0.16.0)."
+  "Every endpoint whose data carries a `:wb/gate` or a `:wb/guard` has its middleware: a
+  route's `:middleware ^:replace […]` replaces the base's own, and the check would be
+  declared and never asked (since 0.16.0, the guard since 0.22.0)."
   [router]
-  (doseq [[path data result] (r/compiled-routes router)
+  (doseq [[path _ result] (r/compiled-routes router)
           method ring/http-methods
+          [k [mw noun]] (sort checks)
           :let [endpoint (get result method)]
-          :when (and endpoint (some? (get-in endpoint [:data :wb/gate])))]
-    (when-not (some #(= ::gate/gate (:name %)) (get-in endpoint [:data :middleware]))
-      (throw (ex-info (str "web-base: route " path " declares :wb/gate but its middleware no longer has the"
-                           " gate — a :middleware ^:replace drops the base's own")
+          :when (and endpoint (some? (get-in endpoint [:data k])))]
+    (when-not (some #(= mw (:name %)) (get-in endpoint [:data :middleware]))
+      (throw (ex-info (str "web-base: route " path " declares " k " but its middleware no longer has the " noun
+                           " — a :middleware ^:replace drops the base's own")
                       {:config-key [:routes] :path path})))))
 
 (defn- check-login-path!
@@ -625,7 +634,8 @@
                                             (gate/middleware {:login-path   login-path
                                                               :render-error render-error})
                                             render/middleware
-                                            coercion/coerce-request-middleware]}
+                                            coercion/coerce-request-middleware
+                                            gate/guard-middleware]}
                         coercion (assoc :coercion coercion))}))
 
 (defn router
@@ -643,6 +653,8 @@
 
     :routes       reitit route data; per route `:wb/layouts` and `:wb/gate`, both
                   inherited by nested routes (layouts concatenate, a child's gate composes with its parent's);
+                  `:wb/guard`, a predicate asked after coercion whose no is a 404, composed
+                  as a gate is (since 0.22.0);
                   `:wb/log-path :template` logs the route's template instead of its path,
                   for a path that carries a secret; `:wb/multipart {:max-file-size n …}`
                   parses a file upload for that route alone

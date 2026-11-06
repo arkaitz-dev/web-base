@@ -8,6 +8,7 @@
             [dev.arkaitz.web-base.gate :as gate]
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.security :as security]
+            [reitit.core :as r]
             [reitit.ring :as ring])
   (:import [java.util Locale]))
 
@@ -376,8 +377,27 @@
                    (nil? (get headers "Location"))))))))
 
 (defn router
-  "`routes` compiled as the base compiles them — a child's gate composed with its
-  parent's — for a test that reads which gates guard which endpoint. A composed gate is
-  identical to none of its parts; its metadata lists them under `:wb/gates`."
+  "`routes` compiled as the base compiles them — a child's gate or guard composed with
+  its parent's — for a test that reads which gates and guards check which endpoint
+  (`route-checks`). A composed gate is identical to none of its parts; its metadata
+  lists them under `:wb/gates`, and a guard's under `:wb/guards`."
   [routes]
   (ring/router routes {:meta-merge gate/merge-route-data}))
+
+(defn route-checks
+  "`{[path method] {:gates [g …] :guards [f …]}}` for every endpoint of `router` — one
+  `router` or `dev.arkaitz.web-base/router` built, so a child's checks are composed with
+  its parent's and a method's with its route's — listing the predicates of each,
+  outermost first and flattened (since 0.22.0): what a test that declares an
+  application's authorisation reads, so a page whose `:wb/guard` sits under one method
+  and not another shows it. An endpoint is a method the route declares; a route-level
+  `:handler` answers every method, and each is listed. The OPTIONS reitit answers on its
+  own is not."
+  [router]
+  (into (sorted-map)
+        (for [[path data result] (r/compiled-routes router)
+              method             (sort ring/http-methods)
+              :let               [endpoint (get result method)]
+              :when              (and endpoint (or (contains? data method) (contains? data :handler)))]
+          [[path method] {:gates  (gate/parts :wb/gate (get-in endpoint [:data :wb/gate]))
+                          :guards (gate/parts :wb/guard (get-in endpoint [:data :wb/guard]))}])))

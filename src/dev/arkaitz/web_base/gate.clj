@@ -9,6 +9,7 @@
   there is a subject and the predicate still says no. No `401`: a proper one
   needs `WWW-Authenticate`, and only whoever authenticates knows the scheme."
   (:require [clojure.string :as str]
+            [dev.arkaitz.web-base.error :as error]
             [dev.arkaitz.web-base.htmx :as htmx]
             [dev.arkaitz.web-base.security :as security]
             [meta-merge.core :as mm]))
@@ -89,7 +90,19 @@
     (render-error {:status 403} request)
     (redirect-for request (with-next login-path request))))
 
-(defn- parts [gate] (or (:wb/gates (meta gate)) [gate]))
+(def ^:private parts-key
+  "Where a composed predicate lists its parts, by the route key it was declared under."
+  {:wb/gate :wb/gates :wb/guard :wb/guards})
+
+(defn parts
+  "The predicates `f`, declared under route key `k` (`:wb/gate` or `:wb/guard`), is made
+  of, outermost first: its own parts when it was composed, else `[f]`; `[]` for nil."
+  [k f]
+  (if (nil? f) [] (or (get (meta f) (parts-key k)) [f])))
+
+(defn- conjoin [k parent child]
+  (with-meta (fn [request] (and (parent request) (child request)))
+    {(parts-key k) (into (parts k parent) (parts k child))}))
 
 (defn compose
   "A gate admitting what both `parent` and `child` admit, the parent asked first. It
@@ -97,8 +110,7 @@
   so a test can name the gates a route is guarded by: a composed gate is identical to
   none of them."
   [parent child]
-  (with-meta (fn [request] (and (parent request) (child request)))
-    {:wb/gates (into (parts parent) (parts child))}))
+  (conjoin :wb/gate parent child))
 
 (defn middleware
   "reitit middleware compiled per route, over the route's data as reitit merged it
@@ -126,21 +138,41 @@
                       (handler request)
                       (refuse request opts))))))})
 
+(def guard-middleware
+  "reitit middleware for `:wb/guard (fn [request] truthy)`, compiled per route after
+  coercion, so the guard sees `:parameters` coerced: a falsy answer is a 404 error
+  datum, the same for a visitor signed in or not, so a resource that is not theirs is
+  never told to exist — where a gate would answer a 403 or a sign-in. A guard composes
+  as a gate does, parent first, and may sit under one method of a route with no routes
+  under it. A guard that is not callable fails at router construction."
+  {:name    ::guard
+   :compile (fn [{:wb/keys [guard]} _router-opts]
+              (when (some? guard)
+                (when-not (ifn? guard)
+                  (throw (ex-info "web-base: a route declares :wb/guard that is not callable"
+                                  {:config-key [:wb/guard] :value guard})))
+                (fn [handler]
+                  (fn [request]
+                    (if (guard request)
+                      (handler request)
+                      (error/throw! {:status 404}))))))})
+
 (defn merge-route-data
   "reitit's merge of route data, parent first, except that two gates compose: a child's
   `:wb/gate` narrows its parent's and never replaces it, so one line under a members-only
   group cannot open it to anyone signed in (decided 2026-10-08, booking FRICTION B17). A
   gate that is not callable stays where it is, so the compile step refuses it — a
   parent's `false` is not quietly replaced by a child's function — and a child's nil
-  leaves the parent's in place. Public for a test that compiles routes as the base does:
-  `testing/router`."
+  leaves the parent's in place. `:wb/guard` composes by the same rules (since 0.22.0),
+  and so does a method's own gate or guard with its route's. Public for a test that
+  compiles routes as the base does: `testing/router`."
   [left right]
-  (let [parent (get left :wb/gate)
-        child  (get right :wb/gate)]
-    (cond
-      (and (ifn? parent) (ifn? child))
-      (assoc (mm/meta-merge (dissoc left :wb/gate) (dissoc right :wb/gate)) :wb/gate (compose parent child))
-      (and (some? parent) (not (ifn? parent)) (some? child))
-      (assoc (mm/meta-merge left right) :wb/gate parent)
-      :else
-      (mm/meta-merge left right))))
+  (reduce-kv (fn [merged k _]
+               (let [parent (get left k)
+                     child  (get right k)]
+                 (cond
+                   (and (ifn? parent) (ifn? child))              (assoc merged k (conjoin k parent child))
+                   (and (some? parent) (not (ifn? parent)) (some? child)) (assoc merged k parent)
+                   :else                                         merged)))
+             (mm/meta-merge left right)
+             parts-key))

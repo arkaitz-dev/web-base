@@ -185,7 +185,8 @@ never to a page of the host's choosing.
 
 **A resource that is not yours is a 404** (since 0.22.0). A gate answers a signed-in
 stranger 403, which tells them the course exists, and runs before coercion, seeing the
-raw id. `:wb/guard (fn [request] truthy)` runs after coercion, last before the handler,
+raw id. `:wb/guard (fn [request] truthy)` runs after coercion, the last of the base's own
+middleware — a route's own `:middleware` runs after it, so it cannot feed the guard —
 and its no is the 404 a path no route matches — the same response, headers and all, for
 a stranger signed in or not:
 

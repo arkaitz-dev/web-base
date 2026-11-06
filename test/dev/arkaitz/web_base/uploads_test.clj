@@ -9,6 +9,7 @@
             [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.security :as security]
+            [dev.arkaitz.web-base.session :as session]
             [dev.arkaitz.web-base.testing :as wt]
             [ring.mock.request :as mock])
   (:import [clojure.lang ExceptionInfo]
@@ -187,7 +188,14 @@
            ["nl\nx.txt" "attachment; filename=\"nl_x.txt\"; filename*=UTF-8''nl%0Ax.txt"]
            ["a+b.txt" "attachment; filename=\"a+b.txt\"; filename*=UTF-8''a%2Bb.txt"]
            ["del\u007Fx.txt" "attachment; filename=\"del_x.txt\"; filename*=UTF-8''del%7Fx.txt"]
-           ["cr\rx.txt" "attachment; filename=\"cr_x.txt\"; filename*=UTF-8''cr%0Dx.txt"]]]
+           ["cr\rx.txt" "attachment; filename=\"cr_x.txt\"; filename*=UTF-8''cr%0Dx.txt"]
+           ["dir/sub.pdf" "attachment; filename=\"dir_sub.pdf\"; filename*=UTF-8''dir%2Fsub.pdf"]
+           ["C:\\Users\\a.pdf" "attachment; filename=\"C__Users_a.pdf\"; filename*=UTF-8''C%3A%5CUsers%5Ca.pdf"]
+           ["a:b.pdf" "attachment; filename=\"a_b.pdf\"; filename*=UTF-8''a%3Ab.pdf"]
+           ["/" "attachment; filename=\"_\"; filename*=UTF-8''%2F"]
+           ["a%b;c,d'e=f.pdf" "attachment; filename=\"a%b;c,d'e=f.pdf\"; filename*=UTF-8''a%25b%3Bc%2Cd%27e%3Df.pdf"]
+           ["a\"b\\c\r\nX-Evil: 1/é.pdf"
+            "attachment; filename=\"a_b_c__X-Evil_ 1__.pdf\"; filename*=UTF-8''a%22b%5Cc%0D%0AX-Evil%3A%201%2F%C3%A9.pdf"]]]
     (let [body (byte-array 3)
           r    (response/attachment body filename)
           cd   (get-in r [:headers "Content-Disposition"])]
@@ -213,3 +221,82 @@
                [(:status r) (get-in r [:headers "Content-Type"]) (get-in r [:headers "Content-Disposition"])
                 (get-in r [:headers "Set-Cookie"]) (Arrays/equals ^bytes bytes ^bytes sent)])
             (str path ": through the stack, the download as built and its bytes whole"))))))
+
+(deftest attachment-with-options-is-sent-under-its-type--and-shown-in-place-only-for-the-five-viewable-types--anything-else-refused-at-the-call
+  (let [body    (byte-array 3)
+        refused (fn [f] (try (f) :answered (catch ExceptionInfo e [(ex-message e) (ex-data e)])))
+        shape   (fn [r] [(sort (keys r)) (:status r) (:headers r) (identical? body (:body r))])
+        inline  (fn [type] [(str "web-base: attachment shows a file in place only as application/pdf, image/png, image/jpeg,"
+                                 " image/gif or image/webp, spelt exactly — not " (pr-str type) "; anything else could run a"
+                                 " script in this origin, so send it as a download")
+                            {:filename "r.pdf" :content-type type}])
+        no-type (fn [type] [(str "web-base: attachment was given a :content-type that is no media type: " (pr-str type))
+                            {:filename "r.pdf" :content-type type}])]
+    (doseq [type ["application/pdf" "image/png" "image/jpeg" "image/gif" "image/webp"]]
+      (is (= [[:body :headers :status] 200 {"Content-Type" type "Content-Disposition" "inline; filename=\"r.pdf\"; filename*=UTF-8''r.pdf"} true]
+             (shape (response/attachment body "r.pdf" {:content-type type :inline? true})))
+          (str type ": shown in place under its type, the name spelt twice")))
+    (is (= [[:body :headers :status] 200 {"Content-Type" "application/pdf" "Content-Disposition" "attachment; filename=\"r.pdf\"; filename*=UTF-8''r.pdf"} true]
+           (shape (response/attachment body "r.pdf" {:content-type "application/pdf"})))
+        "a type without :inline? is still a download")
+    (is (= {"Content-Type" "text/csv" "Content-Disposition" "attachment; filename=\"r.csv\"; filename*=UTF-8''r.csv"}
+           (:headers (response/attachment body "r.csv" {:content-type "text/csv" :inline? false})))
+        "any media type may be downloaded; :inline? false is a download")
+    (is (= {"Content-Type" "application/octet-stream" "Content-Disposition" "attachment; filename=\"r.bin\"; filename*=UTF-8''r.bin"}
+           (:headers (response/attachment body "r.bin" {})))
+        "no options: the octet-stream download")
+    (is (= "inline; filename=\"x_y.png\"; filename*=UTF-8''x%2Fy.png"
+           (get-in (response/attachment body "x/y.png" {:content-type "image/png" :inline? true}) [:headers "Content-Disposition"]))
+        "shown in place, the fallback carries no directory either")
+    (doseq [type ["image/svg+xml" "text/html" "application/xhtml+xml" "application/xml" "text/xml" "text/plain" "text/javascript"
+                  "application/javascript" "image/svg" "image/bmp" "application/pdf; charset=x" "Application/PDF" "image/JPEG"]]
+      (is (= (inline type) (refused #(response/attachment body "r.pdf" {:content-type type :inline? true})))
+          (str (pr-str type) " with :inline?: refused at the call — the five, spelt exactly, and nothing else")))
+    (is (= (inline "application/octet-stream") (refused #(response/attachment body "r.pdf" {:inline? true})))
+        "no type with :inline?: the octet-stream it would be sent as is refused")
+    (doseq [truthy [1 "yes" :y]]
+      (is (= (inline "image/svg+xml") (refused #(response/attachment body "r.pdf" {:content-type "image/svg+xml" :inline? truthy})))
+          (str (pr-str truthy) " as :inline? is inline, and judged as inline")))
+    (is (= ["web-base: attachment takes :content-type and :inline?, not :cache" {:filename "r.pdf" :unknown [:cache]}]
+           (refused #(response/attachment body "r.pdf" {:content-type "application/pdf" :inline? true :cache "x"})))
+        "an option it does not take is refused, named")
+    (is (= ["web-base: attachment takes :content-type and :inline?, not \"b\" :a" {:filename "r.pdf" :unknown ["b" :a]}]
+           (refused #(response/attachment body "r.pdf" {:a 1 "b" 2})))
+        "several, of mixed kinds, named in a stable order — never a ClassCastException")
+    (doseq [bad ["" "  " nil "pdf" :application/pdf "text/plain\r\nX-Evil: 1" "text/\u0000plain" "/pdf"]]
+      (is (= (no-type bad) (refused #(response/attachment body "r.pdf" {:content-type bad})))
+          (str (pr-str bad) ": no media type, refused, never sent as a header")))
+    (testing "the order the refusals are judged in: the name, an option, the type, then showing it in place"
+      (is (= ["web-base: attachment needs a file name, and was given none" {:filename ""}]
+             (refused #(response/attachment body "" {:content-type "" :inline? true :cache 1}))))
+      (is (= ["web-base: attachment takes :content-type and :inline?, not :cache" {:filename "r.pdf" :unknown [:cache]}]
+             (refused #(response/attachment body "r.pdf" {:content-type "" :inline? true :cache 1}))))
+      (is (= (no-type "") (refused #(response/attachment body "r.pdf" {:content-type "" :inline? true})))))
+    (doseq [[label filename opts expected]
+            [["a blank name" "" {} ["web-base: attachment needs a file name, and was given none" {:filename ""}]]
+             ["an unknown option" "r.pdf" {:cache 1} ["web-base: attachment takes :content-type and :inline?, not :cache" {:filename "r.pdf" :unknown [:cache]}]]
+             ["no media type" "r.pdf" {:content-type "pdf"} (no-type "pdf")]
+             ["svg in place" "r.pdf" {:content-type "image/svg+xml" :inline? true} (inline "image/svg+xml")]]]
+      (let [closed (atom false)
+            stream (proxy [java.io.ByteArrayInputStream] [(byte-array 3)] (close [] (reset! closed true)))]
+        (is (= expected (refused #(response/attachment stream filename opts))) (str label ": witness: refused"))
+        (is (true? @closed) (str label ": and the stream was closed, not left open for the collector"))))
+    (let [stream (proxy [java.io.ByteArrayInputStream] [(byte-array 3)] (close [] (throw (java.io.IOException. "close failed"))))
+          e      (try (response/attachment stream "" {}) nil (catch Exception e e))]
+      (is (= ["web-base: attachment needs a file name, and was given none" {:filename ""} [["close failed"]]]
+             [(ex-message e) (ex-data e) (mapv (juxt ex-message) (.getSuppressed ^Throwable e))])
+          "a stream whose close fails: the refusal still names the mistake, the close's failure suppressed on it"))
+    (let [h      (wb/handler {:session    {:key KEY}
+                              :subject-fn #(get-in % [:session :user])
+                              :routes     [["/i" {:get (fn [_] (response/attachment body "r.pdf" {:content-type "application/pdf" :inline? true}))}]
+                                           ["/in" {:post (fn [_] (session/rotate {:status 303 :headers {"Location" "/i"} :body ""} {:user "ann"}))}]]})
+          anon   (h (mock/request :get "/i"))
+          login  (h (mock/header (mock/request :post "/in") "Sec-Fetch-Site" "same-origin"))
+          signed (h (wt/with-cookies (mock/request :get "/i") login))
+          seen   (fn [r] [(:status r) (get-in r [:headers "Content-Type"]) (get-in r [:headers "Content-Disposition"])
+                          (get-in r [:headers "X-Content-Type-Options"]) (get-in r [:headers "Cache-Control"])])]
+      (is (= 303 (:status login)) "witness: signed in")
+      (is (= [200 "application/pdf" "inline; filename=\"r.pdf\"; filename*=UTF-8''r.pdf" "nosniff" nil] (seen anon))
+          "through the stack, anonymous: the type and the disposition as built, the browser told not to sniff, and cacheable")
+      (is (= [200 "application/pdf" "inline; filename=\"r.pdf\"; filename*=UTF-8''r.pdf" "nosniff" "no-store"] (seen signed))
+          "the same file to somebody signed in is no-store without a word from the host"))))

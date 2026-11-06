@@ -543,7 +543,15 @@ never `.` or `..` — and a part with no type is `application/octet-stream`. The
 still the sender's: keep it as a label and store the file under a key of your own, since
 on some filesystems a name like `C:x.png` or `CON` means more than a name. To send a file back,
 `(response/attachment bytes-or-stream filename)` is a download under its name, its
-non-ASCII spelt as RFC 6266 wants; add `Cache-Control` yourself when it is somebody's.
+non-ASCII spelt as RFC 6266 wants and its fallback free of `/`, `\` and `:`. A file you
+have checked may go under its own type, `{:content-type "application/pdf"}`, and be shown
+in place with `:inline? true` — only as `application/pdf`, `image/png`, `image/jpeg`,
+`image/gif` or `image/webp`, spelt exactly; an SVG or an HTML document would run its
+script in your origin, and is refused at the call. In place means a page of its own: the
+default `X-Frame-Options: DENY` keeps it out of a frame of your page. A response to a
+request with a subject or a session is already `no-store`, so a file of somebody's needs
+no `Cache-Control` of yours there; one reached with neither — by a credential in its URL,
+from a mail — is yours to mark `no-store`.
 A spreadsheet export is `(csv/attachment rows "orders.csv")` (since 0.18.0, namespace
 `dev.arkaitz.web-base.csv`). It writes UTF-8 with a byte order mark, quotes every field
 and ends lines in CRLF. A field a spreadsheet would run as a formula gets an apostrophe

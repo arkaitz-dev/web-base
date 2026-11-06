@@ -772,4 +772,15 @@ than 500 bytes a second, a quiet end logged in one line; responses to somebody �
 subject, a session written, a CSRF token read — are `no-store`; and a refused navigation
 carries the page as `next`.
 
+**Amended for 0.23.0, 2026-11-06 (a breaking change):** a body whose declared length is
+past its bound was refused by the body limit itself, outside the session, i18n and
+subject, with the base's bare 413 page — so the commonest refusal, a browser uploading a
+file too large, never reached the host's translated page. It is still never read: the
+limit puts an empty body in its place and passes the request on marked with the 413
+datum, and a middleware just inside i18n, outside multipart and CSRF, answers it with the
+host's error renderer, so nothing that would parse or judge the body runs. A
+`:sessionless` path and an asset its handler serves keep the page they had, answered at
+once; a body found past its bound only as it is read (chunked, or a false length) is
+still the base's page, since the parameter parser that reads it sits outside i18n.
+
 *(Nothing remains open in this document; what is left is implementation.)*

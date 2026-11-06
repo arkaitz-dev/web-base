@@ -5,6 +5,26 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.23.0 — 2026-11-06
+
+The declared-length 413 reaches the host's page.
+
+- **Breaking:** a body whose declared length is past its route's bound is answered by
+  your `:error-layout` — the 413 datum with `:wb/limit :body`, inside the session,
+  subject and negotiated language, a fragment for an htmx swap and text where text is
+  asked for — instead of the base's bare page. A browser uploading a file past
+  `:max-body-bytes` now sees your translated "the whole body is too large" page. The
+  body is still never read: the limit puts an empty one in its place, and the multipart
+  parse, CSRF and the route never run for it. A layout that reads `:wb/limit` already
+  words it; one that throws turns this 413 into the base's 500, as it does for every
+  other page it draws. A refused request now reads its session and asks `:subject-fn`
+  once, and a session due under `:renew` is renewed by it.
+- Unchanged: a `:sessionless` path is answered at once by its own `:render-error` or the
+  base's page, and so is an asset its handler serves; a body found past its bound only as
+  it is read — sent in chunks, or with a false length — is still the base's page.
+- `security/wrap-body-limit` takes a `refuse-here?` predicate before its renderer, and
+  `security/wrap-declared-over` answers what it marks; `handler` wires both.
+
 ## 0.22.0 — 2026-11-06
 
 The academy's friction (A2–A35), decided by a panel and chosen by the user.

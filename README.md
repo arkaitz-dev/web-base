@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.20.0"}
+dev.arkaitz/web-base {:mvn/version "0.23.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -359,13 +359,28 @@ It is the product, so it is written down, outermost first:
 
 ```
 request-id → security headers → proxy (opt-in) → body limit → [assets, sessionless]
-→ error boundary → session → subject → params → i18n → multipart (declared routes) → csrf
+→ error boundary → session → subject → params → i18n → declared-length 413
+→ multipart (declared routes) → csrf
 → router: error → gate → render → coercion → handler
 ```
 
 The subject is computed just inside the session (since 0.17.0; it was innermost), so a
 `:locale-fn` reads `(:wb/subject request)` — a person's chosen language — and the page of
 a refused upload or CSRF token knows who asked.
+
+A body whose declared length is past its bound is never read (since 0.23.0). The body
+limit puts an empty body in its place and passes the request on, and just inside i18n,
+outside multipart and CSRF, it is answered with your `:error-layout`'s 413 page — the
+datum `{:status 413 :wb/limit :body}`, with the session, subject and negotiated
+language present, the htmx fragment or text where those are asked for — while the
+multipart parse, CSRF and the route never run. A `:sessionless` path is still answered
+at once, by its own `:render-error` or the base's page, and so is an asset its handler
+would serve; a request to an asset path that serves nothing goes on to your page. A
+body sent in chunks or with a false length is found past its bound only as it is read,
+by the parameter parser outside i18n, so that one is still the base's page — browsers
+declare the length and do not send it. A refused request now reads its session (one
+read, as any request does) and asks the subject function once; with `:renew`, a
+session due for renewal is renewed by it, as by any response.
 
 The outer error boundary exists for what throws before the router — a session store
 whose database is down, above all, or a subject function that fails: that is the base's
@@ -653,11 +668,11 @@ person which one to fix. A body the parser cannot read, or a text field past
 `:max-file-size` (the parser bounds every part it reads by it — the empty part of an
 input left empty is skipped unread, bounded by the body alone), is a 413 that names no bound, so a
 layout reading `:wb/limit` keeps a default. A body whose declared length is already past
-the route's bound is refused before it is read, with the base's own 413 page — its datum
-says `:body`, but no `:error-layout` sees it, since nothing inside has run. A browser
-declares the length, so give `:max-body-bytes` room above the files it allows: a file past
-`:max-file-size` that still fits the body reaches your page as `:file-size`, and one past
-the body's bound only reaches the base's. A no-JS form works as it is — `csrf-field` inside it — and a
+the route's bound is refused before it is read, and since 0.23.0 it is your 413 page too,
+its datum saying `:body`, rendered in the person's language with nothing parsed (see "The
+wiring order"). A browser declares the length, so give `:max-body-bytes` room above the
+files it allows: a file past `:max-file-size` that still fits the body reaches your page as
+`:file-size`, and one past the body's bound as `:body`. A no-JS form works as it is — `csrf-field` inside it — and a
 multipart body sent to a route that did not declare it is never parsed: CSRF refuses it.
 
 The files live for the request: they are deleted once the handler has answered, so move
@@ -829,7 +844,7 @@ pool smaller than the cores, or set `:virtual-threads? false`.
 **What a slow or large request costs** (since 0.10.0). The base reads no body larger
 than `:max-body-bytes` (200 000 by default) — counted as it is read, so a body sent in
 chunks or with a false length is bounded too, and one declared too long is refused
-unread. Jetty's own form limit never applied: Ring reads the body itself. An idle
+unread, through your `:error-layout` (since 0.23.0). Jetty's own form limit never applied: Ring reads the body itself. An idle
 connection is closed after 30 s (`:max-idle-time`; Ring's own default is 200 s), and a
 body arriving slower than 500 bytes a second is cut with a 408 — an idle timeout alone
 cannot end a client that sends one byte just inside it. A client that hangs up

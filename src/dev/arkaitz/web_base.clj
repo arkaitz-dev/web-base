@@ -7,7 +7,7 @@
 
     request-id → security headers → proxy (opt-in) → body limit
     → [/wb/ assets → sessionless routes → host static → ] error boundary → session → subject
-    → params → i18n → multipart (declared routes only) → csrf
+    → params → i18n → declared-length 413 → multipart (declared routes only) → csrf
     → ring-handler
         router, per matched route: error → gate → render → coercion → guard → handler
         default handler: 404 / 405 / nil-handler 500
@@ -17,8 +17,11 @@
   carry the request id and the security headers. So do the host's `:sessionless`
   routes — a health probe, a webhook — which read no session and write none, whatever
   cookie arrives. The body limit sits outside all of them, so nothing reads more than
-  it allows; multipart sits outside csrf because the token is one of its fields, and
-  inside i18n so a refused upload's page speaks the negotiated language. Session sits
+  it allows; a body whose declared length is past it is never read, and outside a
+  sessionless path or an asset it goes on empty, to be answered with the host's error
+  page just inside i18n and outside multipart and csrf (since 0.23.0). Multipart sits
+  outside csrf because the token is one of its fields, and inside i18n so a refused
+  upload's page speaks the negotiated language. Session sits
   just outside subject (the subject function reads the session), and subject outside
   everything after it, so a `:locale-fn` can read the subject and a refused request's
   page knows who asked (since 0.17.0); session sits outside csrf (the token lives

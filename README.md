@@ -81,7 +81,10 @@ sessions in a row is db-base's: one line each under `:plugins`, shown in their R
   headers. Static assets answer before the session, are revalidated on every load
   (`Cache-Control: no-cache`, since 0.19.0) and answer `304` only to their own date
   (since 0.20.0), so a deploy's stylesheet — or a rollback's — reaches a returning
-  browser at once.
+  browser at once. A date at or before 1980-01-02 is no date (since 0.21.0): it is the
+  constant a build that clamps file times writes, under which new bytes would read as
+  unchanged, so such an asset is sent whole on every load. Do not clamp the jar's own
+  time — a jar's assets are dated by it.
 - **Test helpers** for the host's own suite: the cookies a response set, the
   CSRF token a page carries, a request shaped like an htmx swap.
 - **Lifecycle** as plain `start`/`stop` functions; an optional Integrant
@@ -204,7 +207,8 @@ at all: everything works, and an attacker who planted a session id before the
 login still holds a valid one after it.
 
 The CSRF token does not cross the rotation — copying the old session, as above, drops
-it. A redirect leaves the new session without one until the next page; a login that
+it. The new session always holds a fresh one (since 0.21.0), which the next page renders
+after a redirect; a login that
 renders a page through the base shows the fresh token its new session holds, as long as
 the token is read in a layout (a form the handler built before rotating would carry the
 old one, and is logged by name). An htmx login answered with a fragment makes htmx reload
@@ -379,13 +383,23 @@ such layout, with slots `:lang :title :head :header :nav :identity :content
 property you redefine) and `/wb/htmx.min.js`, and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it — on a page whose
 markup uses htmx (an `hx-…` or `data-hx-…` attribute) or a form (since 0.18.0). Classic
-forms add `(security/csrf-field request)`. A token is stored in the session only when a
-request read it through `csrf-field` or `csrf-token`, so an anonymous request that
-renders neither — a health probe, JSON, a redirect, a public page with no form and no
-htmx — creates no session; read it through those two, while the handler runs, and never
-from `:anti-forgery-token` directly. A page that calls htmx only from a script reads
-`csrf-token` itself, into a `meta` of `:head`. A page with a form still writes the
-session, because its field needs the token.
+forms add `(security/csrf-field request)`. Read the token through those two, while the
+handler runs, and never from `:anti-forgery-token` directly. A page that calls htmx only
+from a script reads `csrf-token` itself, into a `meta` of `:head`.
+
+**CSRF has two checks** (since 0.21.0). A token is born only when the session rotates —
+`session/rotate`, at sign-in — and a session holding one needs it on every POST, PUT,
+PATCH and DELETE, as before. A session holding none — every anonymous visitor, a cart
+included — is checked by what the browser says of the request's origin:
+`Sec-Fetch-Site` `same-origin` or `none` passes, `same-site` and `cross-site` are
+refused; a browser that sends no `Sec-Fetch-Site` (Safari before 16.4) passes when its
+`Origin` is this scheme and this `Host`; a request with neither is refused. So
+`csrf-field` and `csrf-token` answer nil for an anonymous visitor, and a public page with
+forms writes no session row and stays cacheable. A program that POSTs belongs under
+`:sessionless`. **Behind a proxy that ends TLS, set `:proxy-hops`** — without it the
+scheme reads `http`, and the `Origin` fallback refuses every older Safari — and pass the
+`Host` the browser sent through unchanged (nginx's `proxy_set_header Host $host`, never
+`$proxy_host`).
 
 A layout receives the request as the router saw it: what a route's own `:middleware` adds
 never reaches it, because that middleware sits innermost, around the handler alone. What
@@ -525,6 +539,26 @@ page you were on is gone, not broken. Junk, zero, a leading zero or `page` sent 
 404. `(paging/path request n)` is page `n` of the same list for the pager's links, page 1
 spelt without `page`. The statement and the pager's words stay yours.
 
+A list others change while you page through it — a work queue a colleague empties as you
+read — skips a row under numbered pages. `paging/keyset` (since 0.21.0) pages from a
+cursor instead: the id of the row a page ends or starts at.
+
+```clojure
+(paging/keyset request {:size 20 :cursor :id :decode #(orders/anchor ds %) :fetch #(orders/around ds status %)}
+  (fn [{:keys [rows next previous]}]
+    (response/ok (views/queue request rows next previous))))
+```
+
+`decode` turns the cursor string into your key — the anchor row's sort columns, read
+again — and answers nil when it cannot, never throwing. `fetch` receives `{:direction
+:first|:after|:before :key k :limit n}` and answers up to `n` rows; for `:before`, the
+nearest rows first (`ORDER BY` reversed), which `keyset` puts back in the list's order.
+`next` and `previous` are paths, nil at either end, with every other query parameter
+kept. A cursor whose row is gone, an empty page under a cursor and a `before` that
+reaches the start answer a 303 to the first page; a cursor of any other shape, both
+cursors, or one sent twice is a 404. No "page N of M": a cursor knows where it is, not
+how far.
+
 `:max-file-size` is required; `:max-file-count` counts every part, the CSRF field and the
 other fields included — so it is your files plus the form's other fields, and a field
 added to the form takes a file away from the limit unless you raise it; `:max-body-bytes` bounds the whole body, and without it the route
@@ -560,10 +594,10 @@ person reads is the host's to keep; the base remembers nobody's.
 tests need no regex of their own. With ring-mock:
 
 ```clojure
-(let [page   (app (mock/request :get "/login"))
+(let [login  (app (-> (mock/request :post "/login" {"name" "ada"})
+                      (mock/header "Sec-Fetch-Site" "same-origin")))  ; anonymous: checked by origin
+      page   (app (-> (mock/request :get "/me") (testing/with-cookies login)))
       token  (testing/csrf-token page)              ; hidden field or the shell's body attribute
-      login  (app (-> (mock/request :post "/login" {"name" "ada" "__anti-forgery-token" token})
-                      (testing/with-cookies page)))  ; the session cookie the page minted
       swap   (app (-> (mock/request :get "/private") (testing/with-cookies login) testing/fragment))]
   …)
 ```
@@ -577,8 +611,8 @@ For a whole flow, `testing/browser` is that chain as a value:
 
 ```clojure
 (let [b (-> (testing/browser app)
-            (testing/visit :get "/login")                     ; a page with a CSRF token
-            (testing/visit :post "/login" {"name" "ada"}))]   ; the token rides along
+            (testing/visit :get "/login")
+            (testing/visit :post "/login" {"name" "ada"}))]   ; sent as the site's own page sends it
   (:path b)                                                   ; "/me" — where the 303 landed
   (:response b))                                              ; the page it landed on
 ```
@@ -589,8 +623,11 @@ the last page that had one, 301/302/303 followed as a GET up to ten times, and `
 browser puts them: the query string for a GET and for htmx's DELETE, a form body for a
 POST, PUT or PATCH. A POST carries the token as its hidden field; `{:htmx? true}` sends it
 as the header with the headers of a swap, and leaves an `HX-Redirect` for the test to
-read. A PUT, PATCH or DELETE needs `{:htmx? true}`, since no browser form sends one, and
-a request with no token known throws instead of sending.
+read. A PUT, PATCH or DELETE needs `{:htmx? true}`, since no browser form sends one. Each
+also sends `Sec-Fetch-Site: same-origin` and `Origin: http://localhost` (since 0.21.0), as
+a browser does from the site's own page — what an anonymous session is checked by; a test
+of a refusal overrides them with `:headers`. After a sign-in the session holds a token
+the browser has not seen yet: GET a page before the next POST.
 `{:files {"photo" {:filename "a.png" :content-type "image/png" :bytes b}}}` sends the
 form as `multipart/form-data`, the CSRF field among its parts, as a browser does.
 `{:follow? false}` sends one request and follows nothing, for a test that asks *who*
@@ -720,7 +757,10 @@ the right: what the outermost of your proxies saw; everything to its left the cl
 could have written, which is how `:proxy?`'s first entry let anyone choose their own
 rate-limit bucket. One proxy is `1`; a CDN in front of a load balancer is `2`. Fewer
 entries than `n` leave the socket's address. `X-Forwarded-Proto` is read from its last
-entry. The address is the proxy's spelling, brackets and port removed.
+entry. The address is the proxy's spelling, brackets and port removed. The scheme it
+gives is also what an anonymous POST's `Origin` is compared with (since 0.21.0), so a
+host behind TLS without `:proxy-hops` refuses those from browsers that send no
+`Sec-Fetch-Site`.
 
 ### A native binary
 

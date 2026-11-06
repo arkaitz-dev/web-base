@@ -5,6 +5,30 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.21.0 — 2026-11-06
+
+Three items left open, decided by a panel and chosen by the user.
+
+- **Breaking:** CSRF has two checks. A token is born only when the session rotates, and
+  a session holding one needs it, as before. A session holding none — every anonymous
+  visitor — passes a POST, PUT, PATCH or DELETE only when `Sec-Fetch-Site` is
+  `same-origin` or `none`, or, without that header, when `Origin` is this scheme and
+  `Host`; `same-site`, `cross-site` and a request with neither are the 403. An anonymous
+  page with forms now renders no token, writes no session row and is not marked
+  `no-store` — a crawler of the shop's catalogue wrote one row per request. A host must:
+  set `:proxy-hops` behind a TLS proxy and pass the browser's `Host` through, or Safari
+  before 16.4 is refused; expect `csrf-field` and `csrf-token` to answer nil for an
+  anonymous request, a hand-built `{:anti-forgery-token "T"}` included; sign in before
+  reading a token in its tests. `testing/visit` sends `Sec-Fetch-Site: same-origin` and
+  `Origin: http://localhost` on every unsafe method and no longer throws without a token.
+- `paging/keyset`: a list paged from a cursor, for one that changes under the reader —
+  a status-filtered queue skipped a row under numbered pages when the row ahead left the
+  filter. Strict cursors, the host's own `decode` and `fetch`, a 303 to the first page
+  when the anchor is gone; no SQL and no markup.
+- An asset dated at or before 1980-01-02 carries no `Last-Modified` and so is never a
+  304: that date is the constant a build that clamps file times writes, under which
+  changed bytes would have read as unchanged.
+
 ## 0.20.0 — 2026-11-06
 
 The items 0.19.0 recorded, decided by a panel.

@@ -712,6 +712,22 @@ this base's product.
   session — a crawler's — and a shared cache in front of the host that stores HTML must
   key it on the `Cookie` header, or a visitor with a session is served the crawler's
   page. Before this, no page drawn by the shell was cacheable at all.
+  **Amended 2026-11-06 (0.21.0), by the user's choice among a panel's options: a
+  session holding no token is checked by its origin, and a token is born only at
+  rotation.** The amendment above left a page with a classic form costing a row per
+  visitor — one per request for a cookieless crawler, measured on the shop's catalogue.
+  A session that holds a token keeps the token check, unchanged. One that holds none
+  passes an unsafe method only when `Sec-Fetch-Site` is `same-origin` or `none`, or, with
+  that header absent, when `Origin` is the request's scheme and `Host` header — never
+  `:server-port`, which reads 80 behind a TLS proxy; `same-site` is refused, so a sibling
+  subdomain stays out, and a request with neither header is refused, so a proxy that
+  strips them fails loudly instead of opening the door (Go 1.25's
+  `CrossOriginProtection` lets such a request through; this does not). `rotated-session`
+  always stores a fresh token, and `csrf-token` answers one only when the session holds
+  it or a rotation is minting it, so nothing else ever writes one: an anonymous visitor,
+  cart or not, never holds a token, and a tab opened before anything changed never meets
+  a token minted behind its back. Rejected: no token for anyone (it drops the signed-in
+  defence), a signed double-submit cookie (it needs a secret), a second store.
 - **Static assets answer before the session.** The base's `/wb/` files and the host's
   own assets are served from outside the session, CSRF and locale layers: a stylesheet
   fetch never reads the store nor mints a session cookie, and a shared cache may keep

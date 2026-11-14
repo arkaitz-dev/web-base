@@ -17,26 +17,26 @@
   (:import [java.security MessageDigest]))
 
 (def ^:private HEAD-START "<head><meta charset=\"utf-8\"><meta content=\"width=device-width, initial-scale=1\" name=\"viewport\">")
-(def ^:private ASSETS "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer src=\"/wb/htmx.min.js\"></script>")
-(def ^:private SKEL (str HEAD-START ASSETS "</head><body><main class=\"wb-main\"></main></body></html>"))
+(def ^:private ASSETS "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer src=\"/wb/htmx.min.js\"></script><script defer src=\"/wb/nav.js\"></script>")
+(def ^:private SKEL (str HEAD-START ASSETS "</head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>"))
 
 (defn- html [slots] (render/html (shell/page slots)))
 
 (deftest empty-slot-map-emits-only-the-fixed-skeleton
   (is (= (str "<html>" SKEL) (html {})) "no slot → skeleton only: no empty container, no lang, no nonce, no hx-headers")
-  (is (= ["/wb/wb.css" "/wb/htmx.min.js"] [shell/css-path shell/htmx-path])))
+  (is (= ["/wb/wb.css" "/wb/htmx.min.js" "/wb/nav.js"] [shell/css-path shell/htmx-path shell/nav-path])))
 
 (deftest every-slot-lands-in-its-own-container-in-document-order--escaped
   (is (= (str "<html lang=\"eu\">" HEAD-START "<title>T &lt;x&gt;</title>" ASSETS "<meta content=\"b\" name=\"a\"></head>"
               "<body><header class=\"wb-header\"><h1>H</h1></header><nav class=\"wb-nav\"><a href=\"/\">n</a></nav>"
-              "<div class=\"wb-identity\"><span>me</span></div><main class=\"wb-main\"><p>c</p></main>"
+              "<div class=\"wb-identity\"><span>me</span></div><main class=\"wb-main\" tabindex=\"-1\"><p>c</p></main>"
               "<footer class=\"wb-footer\"><small>f</small></footer></body></html>")
          (html {:lang "eu" :title "T <x>" :head [:meta {:name "a" :content "b"}]
                 :header [:h1 "H"] :nav [:a {:href "/"} "n"] :identity [:span "me"] :content [:p "c"] :footer [:small "f"]}))
       "each slot in its own container, document order, :head last in <head>, title escaped"))
 
 (deftest head-slot-accepts-a-seq-and-is-appended-last
-  (is (= (str "<html>" HEAD-START ASSETS "<meta name=\"a\"><link href=\"/i\" rel=\"icon\"></head><body><main class=\"wb-main\"></main></body></html>")
+  (is (= (str "<html>" HEAD-START ASSETS "<meta name=\"a\"><link href=\"/i\" rel=\"icon\"></head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:head (list [:meta {:name "a"}] [:link {:rel "icon" :href "/i"}])}))
       "a seq :head renders every element after the base script"))
 
@@ -50,8 +50,8 @@
       (is (= (str expected SKEL) (html slots))))))
 
 (deftest nonce-on-the-htmx-script-iff-the-request-carries-wb-nonce
-  (is (= (str "<html>" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"abc+/==\" src=\"/wb/htmx.min.js\"></script>"
-              "</head><body><main class=\"wb-main\"></main></body></html>")
+  (is (= (str "<html>" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"abc+/==\" src=\"/wb/htmx.min.js\"></script><script defer nonce=\"abc+/==\" src=\"/wb/nav.js\"></script>"
+              "</head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:request {:wb/nonce "abc+/=="}}))
       "nonce lands on the htmx script only"))
 
@@ -74,41 +74,41 @@
       (is (false? @(::security/csrf-used req)) "formless, hx-free → no token read (csrf-used stays false)")))
   (testing "an attribute that merely contains hx- is not one htmx acts on"
     (let [req (token-request)]
-      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><a class=\"hx-link\" href=\"/docs/hx-boost\" id=\"hx-doc\">docs</a></main></body></html>")
+      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\" tabindex=\"-1\"><a class=\"hx-link\" href=\"/docs/hx-boost\" id=\"hx-doc\">docs</a></main></body></html>")
              (html {:request req :content [:a {:href "/docs/hx-boost" :id "hx-doc" :class "hx-link"} "docs"]}))
           "hx- inside a value is not an attribute → no token")
       (is (false? @(::security/csrf-used req)) "and no read")))
   (doseq [[label slots main]
           [["hx-post keyword attribute"
             {:content [:button {:hx-post "/x"} "go"]}
-            "<main class=\"wb-main\"><button hx-post=\"/x\">go</button></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/x\">go</button></main>"]
            ["data-hx- prefix"
             {:content [:a {:data-hx-get "/x"} "go"]}
-            "<main class=\"wb-main\"><a data-hx-get=\"/x\">go</a></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><a data-hx-get=\"/x\">go</a></main>"]
            ["upper-case attribute, which an HTML parser lower-cases"
             {:content [:button {:HX-Post "/x"} "go"]}
-            "<main class=\"wb-main\"><button HX-Post=\"/x\">go</button></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><button HX-Post=\"/x\">go</button></main>"]
            ["lazy content, untouched before the call"
             {:content (for [x ["a" "b"]] [:button {:hx-post (str "/" x)} x])}
-            "<main class=\"wb-main\"><button hx-post=\"/a\">a</button><button hx-post=\"/b\">b</button></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/a\">a</button><button hx-post=\"/b\">b</button></main>"]
            ["a bare boolean attribute, as hiccup renders {:hx-boost true}"
             {:content [:div {:hx-boost true} "x"]}
-            "<main class=\"wb-main\"><div hx-boost>x</div></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><div hx-boost>x</div></main>"]
            ["raw HTML"
             {:content (h/raw "<button hx-post=\"/x\">go</button>")}
-            "<main class=\"wb-main\"><button hx-post=\"/x\">go</button></main>"]
+            "<main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/x\">go</button></main>"]
            ["hx only in :header"
             {:header [:a {:hx-get "/h"} "h"] :content [:p "c"]}
-            "<header class=\"wb-header\"><a hx-get=\"/h\">h</a></header><main class=\"wb-main\"><p>c</p></main>"]
+            "<header class=\"wb-header\"><a hx-get=\"/h\">h</a></header><main class=\"wb-main\" tabindex=\"-1\"><p>c</p></main>"]
            ["hx only in :nav"
             {:nav [:a {:hx-get "/n"} "n"] :content [:p "c"]}
-            "<nav class=\"wb-nav\"><a hx-get=\"/n\">n</a></nav><main class=\"wb-main\"><p>c</p></main>"]
+            "<nav class=\"wb-nav\"><a hx-get=\"/n\">n</a></nav><main class=\"wb-main\" tabindex=\"-1\"><p>c</p></main>"]
            ["hx only in :identity"
             {:identity [:a {:hx-get "/i"} "i"] :content [:p "c"]}
-            "<div class=\"wb-identity\"><a hx-get=\"/i\">i</a></div><main class=\"wb-main\"><p>c</p></main>"]
+            "<div class=\"wb-identity\"><a hx-get=\"/i\">i</a></div><main class=\"wb-main\" tabindex=\"-1\"><p>c</p></main>"]
            ["hx only in :footer"
             {:footer [:a {:hx-get "/f"} "f"] :content [:p "c"]}
-            "<main class=\"wb-main\"><p>c</p></main><footer class=\"wb-footer\"><a hx-get=\"/f\">f</a></footer>"]]]
+            "<main class=\"wb-main\" tabindex=\"-1\"><p>c</p></main><footer class=\"wb-footer\"><a hx-get=\"/f\">f</a></footer>"]]]
     (testing label
       (let [req (token-request)]
         (is (= (with-token main) (html (assoc slots :request req))) (str label " → token on <body>"))
@@ -117,29 +117,29 @@
     (let [req  (token-request)
           form (map (fn [_] [:form (security/csrf-field req)]) [:once])]
       (is (false? @(::security/csrf-used req)) "witness: nothing read the token before the shell ran")
-      (is (= (with-token "<main class=\"wb-main\"><form><input name=\"__anti-forgery-token\" type=\"hidden\" value=\"tok/ABC+123=\"></form></main>")
+      (is (= (with-token "<main class=\"wb-main\" tabindex=\"-1\"><form><input name=\"__anti-forgery-token\" type=\"hidden\" value=\"tok/ABC+123=\"></form></main>")
              (html {:request req :content form}))
           "the body's token and the field's are one, and the decision came after the form rendered")
       (is (true? @(::security/csrf-used req)))))
   (testing "content that read the token itself, with no form and no htmx — a meta for a script"
     (let [req  (token-request)
           read (map (fn [_] [:span {:data-token (security/csrf-token req)}]) [:once])]
-      (is (= (with-token "<main class=\"wb-main\"><span data-token=\"tok/ABC+123=\"></span></main>")
+      (is (= (with-token "<main class=\"wb-main\" tabindex=\"-1\"><span data-token=\"tok/ABC+123=\"></span></main>")
              (html {:request req :content read}))
           "a read by the content puts the token on <body> too: the session keeps it either way")))
   (testing "an anonymous htmx page carries no token: its session holds none (since 0.21.0)"
     (let [req (dissoc (token-request) ::security/csrf-stored)]
-      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+      (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/x\">go</button></main></body></html>")
              (html {:request req :content [:button {:hx-post "/x"} "go"]}))
           "no hx-headers on <body>, though the request carries the library's token")
       (is (false? @(::security/csrf-used req)) "and nothing was read")))
   (testing "an htmx page under `:csrf false` carries no token, because there is none"
-    (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+    (is (= (str "<html>" HEAD-START ASSETS "</head><body><main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/x\">go</button></main></body></html>")
            (html {:request {} :content [:button {:hx-post "/x"} "go"]}))
         "no token on the request → no hx-headers, never an empty one"))
   (testing "lang, nonce and token compose"
-    (is (= (str "<html lang=\"es\">" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script></head>"
-                "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok&quot;}\"><main class=\"wb-main\"><button hx-post=\"/x\">go</button></main></body></html>")
+    (is (= (str "<html lang=\"es\">" HEAD-START "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script><script defer nonce=\"n1\" src=\"/wb/nav.js\"></script></head>"
+                "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;tok&quot;}\"><main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/x\">go</button></main></body></html>")
            (html {:request {:anti-forgery-token "tok" :wb/nonce "n1" :wb/locale "es" ::security/csrf-used (volatile! false)
                             ::security/csrf-stored true}
                   :content [:button {:hx-post "/x"} "go"]})))))
@@ -151,7 +151,7 @@
                           {:data {:middleware [render/middleware]}}))]
     (is (= {:status 200
             :headers {"Vary" "HX-Request, HX-Request-Type" "Content-Type" "text/html; charset=utf-8"}
-            :body (str "<!DOCTYPE html>\n<html>" HEAD-START "<title>Home</title>" ASSETS "</head><body><main class=\"wb-main\"><p>hi</p></main></body></html>")}
+            :body (str "<!DOCTYPE html>\n<html>" HEAD-START "<title>Home</title>" ASSETS "</head><body><main class=\"wb-main\" tabindex=\"-1\"><p>hi</p></main></body></html>")}
            (app (mock/request :get "/")))
         "shell as route layout: doctype + title slot")
     (is (= "<p>hi</p>" (:body (app (mock/header (mock/request :get "/") "HX-Request" "true")))) "partial: bare")))
@@ -182,7 +182,8 @@
         n (second (re-find #"^script-src 'nonce-([A-Za-z0-9+/]{22}==)'$" (str (get-in r [:headers "Content-Security-Policy"]))))]
     (is (string? n) (str "CSP header present and well formed: " (pr-str (get-in r [:headers "Content-Security-Policy"]))))
     (is (str/includes? (:body r) (str "<script defer nonce=\"" n "\" src=\"/wb/htmx.min.js\"></script>")) "the script carries the CSP's nonce")
-    (is (= 1 (count (re-seq #"nonce=\"" (:body r)))) "exactly one nonce attribute in the page")
+    (is (str/includes? (:body r) (str "<script defer nonce=\"" n "\" src=\"/wb/nav.js\"></script>")) "and so does the base's nav.js")
+    (is (= [n n] (map second (re-seq #"nonce=\"([^\"]*)\"" (:body r)))) "the base's two scripts, and no other nonce in the page")
     (is (str/starts-with? (:body r) "<!DOCTYPE html>\n<html><head>"))))
 
 (deftest a-formless-hx-free-page-writes-no-session-and-is-not-marked-private--nor-does-an-anonymous-htmx-page--a-signed-in-one-is
@@ -191,14 +192,14 @@
         a   (app (mock/request :get "/hx"))
         c   (app (testing/with-cookies (mock/request :get "/hx") (sign-in app)))]
     (is (= 200 (:status r)))
-    (is (str/ends-with? (:body r) "</head><body><main class=\"wb-main\"><p>hi</p></main></body></html>")
+    (is (str/ends-with? (:body r) "</head><body><main class=\"wb-main\" tabindex=\"-1\"><p>hi</p></main></body></html>")
         "witness: the page rendered through the shell, with a bare <body>")
     (is (= [] (testing/header-values (:headers r) "Set-Cookie"))
         (str "a formless, hx-free page set a session cookie: " (testing/header-values (:headers r) "Set-Cookie")))
     (is (nil? (testing/csrf-token r)) "and carries no token")
     (is (nil? (get-in r [:headers "Cache-Control"])) "nothing read the token, so the page is not marked private")
     (testing "an anonymous htmx page, by design since 0.21.0: its session holds no token to send"
-      (is (str/ends-with? (:body a) "</head><body><main class=\"wb-main\"><button hx-post=\"/hx\">go</button></main></body></html>")
+      (is (str/ends-with? (:body a) "</head><body><main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/hx\">go</button></main></body></html>")
           "witness: the htmx page rendered, with a bare <body>")
       (is (= [] (testing/header-values (:headers a) "Set-Cookie"))
           (str "an anonymous htmx page set a session cookie: " (testing/header-values (:headers a) "Set-Cookie")))
@@ -209,7 +210,7 @@
         (is (= "no-store" (get-in c [:headers "Cache-Control"])))
         (is (and (string? token) (re-matches #"[A-Za-z0-9+/]{80}" token)))
         (is (str/includes? (:body c) (str "<body hx-headers:inherited=\"{&quot;X-CSRF-Token&quot;:&quot;" token
-                                          "&quot;}\"><main class=\"wb-main\"><button hx-post=\"/hx\">go</button></main>")))))))
+                                          "&quot;}\"><main class=\"wb-main\" tabindex=\"-1\"><button hx-post=\"/hx\">go</button></main>")))))))
 
 (deftest token-embedded-in-hx-headers-is-the-one-wrap-csrf-accepts--round-trip
   (let [app    (app-with-shell)

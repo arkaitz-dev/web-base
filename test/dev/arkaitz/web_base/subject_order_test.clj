@@ -54,7 +54,7 @@
   (:response (wt/visit b method path params (assoc opts :follow? false))))
 
 (defn- html-tag [r] (re-find #"<html[^>]*>" (str (:body r))))
-(defn- word [r] (second (re-find #"<main class=\"wb-main\"><p>([^<]*)</p>" (str (:body r)))))
+(defn- word [r] (second (re-find #"<main class=\"wb-main\" tabindex=\"-1\"><p>([^<]*)</p>" (str (:body r)))))
 (defn- who [r] (second (re-find #"<p class=\"who\">([^<]*)</p>" (str (:body r)))))
 
 (deftest a-locale-fn-reading-the-subject-decides-the-page-language

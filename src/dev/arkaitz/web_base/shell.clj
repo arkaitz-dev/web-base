@@ -29,6 +29,9 @@
 
 (def css-path "/wb/wb.css")
 (def htmx-path "/wb/htmx.min.js")
+(def nav-path
+  "The base's own script that moves the focus to `<main>` after `wb/link` swaps it."
+  "/wb/nav.js")
 
 (defn- csrf-headers
   "The token is base64: no quote or backslash can reach the JSON."
@@ -57,7 +60,8 @@
         body  (render/html (list (when header [:header.wb-header header])
                                  (when nav [:nav.wb-nav nav])
                                  (when who [:div.wb-identity who])
-                                 [:main.wb-main content]
+                                 ;; Focusable from a script, never by Tab: where /wb/nav.js puts the focus after a swap.
+                                 [:main.wb-main {:tabindex "-1"} content]
                                  (when footer [:footer.wb-footer footer])))
         token (token-for request body)]
     [:html (cond-> {} lang (assoc :lang lang))
@@ -67,7 +71,7 @@
       (when title [:title title])
       [:link {:rel "stylesheet" :href css-path}]
       (for [href (:wb/stylesheets request)] [:link {:rel "stylesheet" :href href}])
-      (for [src (distinct (concat [htmx-path] (:wb/scripts request) scripts))]
+      (for [src (distinct (concat [htmx-path nav-path] (:wb/scripts request) scripts))]
         [:script (cond-> {:src src :defer true} nonce (assoc :nonce nonce))])
       head]
      [:body (cond-> {} token (assoc (keyword "hx-headers:inherited") (csrf-headers token)))

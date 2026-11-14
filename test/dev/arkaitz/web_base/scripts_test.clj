@@ -75,8 +75,9 @@
     (is (and (string? content) (re-matches #"[A-Za-z0-9+/]{80}" content)) "witness: the meta rendered, carrying an 80-character token")
     (is (= "X-CSRF-Token" header) "the header it names is the one the shell's htmx sends")
     (is (str/includes? (:body in) (str "<script defer nonce=\"" (nonce-of in) "\" src=\"/wb/htmx.min.js\"></script>"
+                                       "<script defer nonce=\"" (nonce-of in) "\" src=\"/wb/nav.js\"></script>"
                                        "<meta content=\"" content "\" data-header=\"X-CSRF-Token\" name=\"csrf-token\"></head>"))
-        "the meta sits in the head, after the base's script")
+        "the meta sits in the head, after the base's scripts")
     (is (= [200 "<!DOCTYPE html>\n<html>"] (update (post header content) 1 #(subs % 0 22)))
         "the meta's token, sent under the meta's header, is accepted")
     (is (= 403 (first (post))) "without it: refused")
@@ -88,7 +89,7 @@
       (is (= ["no-store" "no-store"] [(get-in in [:headers "Cache-Control"]) (get-in plain [:headers "Cache-Control"])])
           "both pages are uncached, as every page of a session is: the meta adds nothing there, and takes nothing away"))
     (let [anon (app (mock/request :get "/meta"))]
-      (is (str/ends-with? (:body anon) "</head><body><main class=\"wb-main\"><p>x</p></main></body></html>")
+      (is (str/ends-with? (:body anon) "</head><body><main class=\"wb-main\" tabindex=\"-1\"><p>x</p></main></body></html>")
           "witness: the anonymous page rendered, its body bare")
       (is (= [false false nil []] [(str/includes? (:body anon) "csrf-token") (str/includes? (:body anon) "data-header")
                                     (get-in anon [:headers "Cache-Control"]) (testing/header-values (:headers anon) "Set-Cookie")])
@@ -100,17 +101,17 @@
 
 (deftest scripts-follow-htmx--the-routes-before-the-slots--each-once-at-its-first-place--deferred-under-the-nonce-iff-present
   (is (= (str "<html>" HEAD-START CSS
-              "<script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script><script defer nonce=\"n1\" src=\"/r1.js\"></script>"
+              "<script defer nonce=\"n1\" src=\"/wb/htmx.min.js\"></script><script defer nonce=\"n1\" src=\"/wb/nav.js\"></script><script defer nonce=\"n1\" src=\"/r1.js\"></script>"
               "<script defer nonce=\"n1\" src=\"/both.js\"></script><script defer nonce=\"n1\" src=\"/s1.js\"></script>"
-              "<meta name=\"x\"></head><body><main class=\"wb-main\"></main></body></html>")
+              "<meta name=\"x\"></head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:request {:wb/nonce "n1" :wb/scripts ["/r1.js" "/wb/htmx.min.js" "/both.js"]}
                 :scripts ["/both.js" "/s1.js"] :head [:meta {:name "x"}]}))
       "the route's before the slot's, a shared path once at its first place, htmx never twice, :head after them all")
-  (is (= (str "<html>" HEAD-START CSS "<script defer src=\"/wb/htmx.min.js\"></script><script defer src=\"/r.js\"></script>"
-              "<script defer src=\"/s.js\"></script></head><body><main class=\"wb-main\"></main></body></html>")
+  (is (= (str "<html>" HEAD-START CSS "<script defer src=\"/wb/htmx.min.js\"></script><script defer src=\"/wb/nav.js\"></script><script defer src=\"/r.js\"></script>"
+              "<script defer src=\"/s.js\"></script></head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:request {:wb/scripts ["/r.js"]} :scripts ["/s.js"]}))
       "no nonce on the request: no nonce attribute on any script")
-  (is (= (str "<html>" HEAD-START CSS "<script defer src=\"/wb/htmx.min.js\"></script></head><body><main class=\"wb-main\"></main></body></html>")
+  (is (= (str "<html>" HEAD-START CSS "<script defer src=\"/wb/htmx.min.js\"></script><script defer src=\"/wb/nav.js\"></script></head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:request {} :scripts nil}))
       "no scripts: the skeleton"))
 
@@ -133,10 +134,10 @@
                  (is (string? (nonce-of r)) (str path ": witness: the CSP header carries a nonce"))
                  [r (vec (re-seq #"<script[^>]*></script>" (str (:body r))))]))]
     (doseq [[path srcs on-request]
-            [["/p/c" ["/wb/htmx.min.js" "/p.js" "/shared.js" "/c.js"] ["/p.js" "/shared.js" "/c.js"]]
-             ["/p/only" ["/wb/htmx.min.js" "/p.js" "/shared.js"] ["/p.js" "/shared.js"]]
-             ["/p/none" ["/wb/htmx.min.js"] ::absent]
-             ["/bare" ["/wb/htmx.min.js"] ::absent]]]
+            [["/p/c" ["/wb/htmx.min.js" "/wb/nav.js" "/p.js" "/shared.js" "/c.js"] ["/p.js" "/shared.js" "/c.js"]]
+             ["/p/only" ["/wb/htmx.min.js" "/wb/nav.js" "/p.js" "/shared.js"] ["/p.js" "/shared.js"]]
+             ["/p/none" ["/wb/htmx.min.js" "/wb/nav.js"] ::absent]
+             ["/bare" ["/wb/htmx.min.js" "/wb/nav.js"] ::absent]]]
       (let [[r found] (page :get path)]
         (is (= 200 (:status r)) (str path ": witness: served"))
         (is (= (tags r srcs) found) (str path ": the parent's scripts before the child's, each once, every one under the CSP's nonce"))
@@ -144,10 +145,10 @@
         (is (= (count found) (count (re-seq #"nonce=\"" (:body r)))) (str path ": no nonce anywhere but on these scripts"))))
     (let [[r found] (page :post "/save")]
       (is (= 422 (:status r)) "witness: the POST rerendered /bare")
-      (is (= (tags r ["/wb/htmx.min.js"]) found) "a POST's scripts do not follow it into a page that has none"))
+      (is (= (tags r ["/wb/htmx.min.js" "/wb/nav.js"]) found) "a POST's scripts do not follow it into a page that has none"))
     (let [[r found] (page :post "/save2")]
       (is (= 422 (:status r)) "witness: the POST rerendered /p/c")
-      (is (= (tags r ["/wb/htmx.min.js" "/p.js" "/shared.js" "/c.js"]) found) "the page's own scripts, never the POST's beside them"))))
+      (is (= (tags r ["/wb/htmx.min.js" "/wb/nav.js" "/p.js" "/shared.js" "/c.js"]) found) "the page's own scripts, never the POST's beside them"))))
 
 (def ^:private hostile
   [["a relative path" ["app.js"]]

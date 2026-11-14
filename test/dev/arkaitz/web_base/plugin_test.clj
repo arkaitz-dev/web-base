@@ -377,17 +377,17 @@
         app    (wb/handler cfg)
         links  (str "<link href=\"/wb/wb.css\" rel=\"stylesheet\"><link href=\"/a/1.css\" rel=\"stylesheet\">"
                     "<link href=\"/a/2.css\" rel=\"stylesheet\"><link href=\"/b/1.css\" rel=\"stylesheet\">"
-                    "<link href=\"/host.css\" rel=\"stylesheet\"><script defer src=\"/wb/htmx.min.js\"></script><meta name=\"a\">")
+                    "<link href=\"/host.css\" rel=\"stylesheet\"><script defer src=\"/wb/htmx.min.js\"></script><script defer src=\"/wb/nav.js\"></script><meta name=\"a\">")
         hrefs  #(vec (map second (re-seq #"<link href=\"([^\"]+)\"" (str %))))
         ;; The default CSP gives the script tag a fresh nonce per request; it is not what
         ;; this test is about, so it is taken out before the comparison.
         body   #(some-> % :body (str/replace #" nonce=\"[^\"]+\"" ""))]
     (let [body (body (app (mock/request :get "/")))]
-      (is (= (str "<!DOCTYPE html>\n<html>" HEAD-START links "</head><body><main class=\"wb-main\"><p>hi</p></main></body></html>") body)
+      (is (= (str "<!DOCTYPE html>\n<html>" HEAD-START links "</head><body><main class=\"wb-main\" tabindex=\"-1\"><p>hi</p></main></body></html>") body)
           (str "a page: wb.css, the plugins' in order, the host's, the script, :head — links were " (hrefs body))))
     (doseq [[path status] [["/nope" 404] ["/no" 403]]]
       (let [r (app (mock/request :get path))]
-        (is (= [status (str "<!DOCTYPE html>\n<html>" HEAD-START links "</head><body><main class=\"wb-main\">" (frag status)
+        (is (= [status (str "<!DOCTYPE html>\n<html>" HEAD-START links "</head><body><main class=\"wb-main\" tabindex=\"-1\">" (frag status)
                             "</main></body></html>")]
                [(:status r) (body r)])
             (str "an error page through the host's layout (" status "): the same links — " (hrefs (:body r))))))

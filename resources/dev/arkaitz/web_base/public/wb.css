@@ -53,6 +53,8 @@ body {
 }
 
 .wb-main { padding-block: var(--wb-gap); }
+/* Focused by /wb/nav.js after a swap, never by the keyboard: no ring around the page. */
+.wb-main:focus { outline: none; }
 
 .wb-footer {
   color: var(--wb-muted);

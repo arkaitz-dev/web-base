@@ -248,7 +248,7 @@
         globs (metadata-globs)
         hit?  (fn [path] (some #(re-matches (glob-regex %) path) globs))]
     (is (seq globs) (str "the metadata is on the classpath at " metadata-path))
-    (is (= 2 (count files)) (str "witness: the stylesheet and htmx are read from resources/: " files))
+    (is (= 3 (count files)) (str "witness: the stylesheet, htmx and nav.js are read from resources/: " files))
     (is (= [] (remove hit? files)) "every asset is matched by a glob")
     (is (not (hit? "dev/arkaitz/web_base/public"))
         "and the directory is not: a registered directory is served as a listing of its names")

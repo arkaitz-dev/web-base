@@ -5,6 +5,27 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.24.0 — 2026-11-14
+
+Links between pages repaint only `<main>`.
+
+- `wb/link`: an `<a>` with its `href` plus `hx-get`, `hx-select`/`hx-target` `main`, an outer
+  swap that shows the page's top, and `hx-push-url`. `hx-select` makes htmx ask for the whole
+  page, so every route answers as it does a navigation and htmx takes `<main>` and the
+  title. A non-local `href`, or attrs giving `href` or any htmx attribute, are refused. The
+  README's "htmx" says what to keep as a plain `[:a]`.
+- **Breaking, for a page with scripts of its own:** an htmx GET that swaps `<main>` or
+  `<body>` with the whole page — a `wb/link`, Back — is answered with `HX-Redirect` to the
+  page itself, its headers and session kept, so the browser loads it and its `<head>` runs.
+  Before, such a request got the document. A form `rerender` shows again, another method, a
+  status other than 200 and a swap of another element are unchanged.
+- **Breaking, markup:** every shell page loads `/wb/nav.js` after htmx, under the same
+  nonce, and `<main class="wb-main">` carries `tabindex="-1"`: after a link's swap the script
+  moves the focus to `<main>`, as loading a page would. A test that pins the shell's exact
+  head or `<main>` tag sees both. The base's own scripts never count as a page's own.
+- `htmx/partial-request?` is unchanged; its docstring no longer says `HX-Request` is on
+  every htmx request: htmx 4 sends a history restore without it.
+
 ## 0.23.0 — 2026-11-06
 
 The declared-length 413 reaches the host's page.

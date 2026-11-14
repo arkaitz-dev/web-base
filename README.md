@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.23.0"}
+dev.arkaitz/web-base {:mvn/version "0.24.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -431,7 +431,7 @@ A layout is a function of one map of slots: `:content`, `:request`, plus whateve
 the handler put under `:wb/slots`. Nesting is composition. `shell/page` is one
 such layout, with slots `:lang :title :head :scripts :header :nav :identity :content
 :footer`; it links `/wb/wb.css` (structural CSS, every colour a `--wb-*` custom
-property you redefine) and `/wb/htmx.min.js`, and puts the CSRF token in
+property you redefine), `/wb/htmx.min.js` and `/wb/nav.js` (since 0.24.0, see "htmx"), and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it — on a page whose
 markup uses htmx (an `hx-…` or `data-hx-…` attribute) or a form (since 0.18.0). Classic
 forms add `(security/csrf-field request)`. Read the token through those two, while the
@@ -786,6 +786,36 @@ add — rides along with `hx-swap-oob="true"` and its own id.
       (response/ok rows)
       (response/ok (contacts-page q rows)))))
 ```
+
+**Links between your pages** (since 0.24.0) repaint only `<main>`, as a single-page
+application would, and keep a real `href`:
+
+```clojure
+(wb/link (wb/path-for request :route/orders) "Orders")
+(wb/link (paging/path request 2) {:rel "next"} "Next")
+```
+
+`link` renders the `<a>` with `hx-get` on the same path, `hx-select` and `hx-target` on
+`main`, an outer swap that brings the top of the page into view, and `hx-push-url`. Because
+of `hx-select`, htmx asks for the whole page (`HX-Request-Type: full`), so your route answers
+as it does a navigation — layouts, the gate's redirect to sign in, error pages, a route of
+yours that answers its own fragment to htmx — and htmx takes `<main>` and the `<title>`. A
+new tab, a modified click, a reload and a browser without JavaScript follow the `href`.
+After the swap the base's `/wb/nav.js` moves the focus to `<main>`, which carries
+`tabindex="-1"`, unless the new content has an `[autofocus]`.
+
+- **The href is a path of this origin** (`"/"` or `render/local-path?`), and the attrs may
+  not give `href` or an htmx attribute; either is refused. A link that needs its own htmx
+  is an `[:a]` you write.
+- **What must load as a document stays an `[:a]`**: a download (`csv/attachment`,
+  `response/attachment`), the sign-in and sign-out links, another site.
+- **A page with scripts of its own** — the route's `:wb/scripts` or a `:scripts` slot —
+  answers a link's swap, and Back into it, with `HX-Redirect` to itself, so its `<head>`
+  runs: the browser loads it. Only a GET that swaps `<main>` or `<body>` is answered so;
+  a form shown again by `rerender`, another method and a swap of another element are not.
+- **What sits outside `<main>` is not repainted**: the header, the nav and the identity
+  corner stay as the page that was loaded drew them. A nav that marks the current page, or
+  a counter in the header, needs `hx-swap-oob` from the page, or a plain `[:a]`.
 
 ### Lifecycle
 

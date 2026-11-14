@@ -504,9 +504,19 @@ exactly that. The intermediate case — a swap that wants the section but not th
 is named by the handler as a height counted from the innermost layout, and **what it
 names is obeyed on both kinds of request**: a full navigation with an explicit height
 below the stack gets exactly that, without a doctype. And under htmx 4 "`HX-Request`
-present" is not enough on its own: a history restore and a body-targeted swap also carry
-it and want the whole document, which they say with `HX-Request-Type: full`. The base
+present" is not enough on its own: a body-targeted swap or an `hx-select` also carries it
+and wants the whole document, which it says with `HX-Request-Type: full`; a history
+restore says `full` without `HX-Request` at all (htmx builds its headers anew). The base
 reads both headers, in one place.
+
+*Amended 2026-11-14 (0.24.0), internal navigation.* A link between pages of the host
+repaints only `<main>`: `wb/link` asks for the whole page with `hx-select`, so nothing
+server-side tells a link from a navigation, and htmx takes `<main>` and the title. What
+htmx cannot do is run the `<head>` it is answered with, so a page that loads scripts of its
+own answers such a swap — and Back into it — with `HX-Redirect` to itself, decided by the
+shell that rendered it, never by the link. `hx-boost` was rejected: it swaps `<body>`'s
+content and leaves `<body>`'s token behind, runs scripts under another response's nonce, and
+captures downloads.
 
 ### The one way to spoil this
 

@@ -913,6 +913,53 @@
   swap, uncached — how the gate sends a refused visitor away, for a host's own detour."
   gate/redirect-for)
 
+(def ^:private link-navigation
+  "What makes a link swap the page's `<main>` instead of loading the page. `hx-select`
+  makes htmx 4 send `HX-Request-Type: full`, so the server renders the ordinary page —
+  every layout, gate and error page as a navigation gets them — and htmx takes its
+  `<main>` and its `<title>`. Without it the request is a fragment, and a route that
+  answers a fragment of its own would land that fragment in `<main>`. htmx pushes the
+  URL only for a boosted element unless told to. `show:top showTarget:body` brings the
+  page's top into view, as a navigation does: htmx 4 reads `show` as top or bottom only,
+  and the element it shows from `showTarget`."
+  {:hx-target "main" :hx-select "main" :hx-swap "outerHTML show:top showTarget:body" :hx-push-url "true"})
+
+(defn- link-decides?
+  "Whether attribute `k` is one a caller of `link` may not give: the `href`, or anything
+  htmx reads — `hx-action`, `hx-config`, `hx-vals` or `hx-status:…` each change where the
+  link goes or how it swaps, and htmx reads `data-hx-` too. Hiccup renders a string key
+  or a keyword in another case as an attribute of its own, so the name is compared as a
+  browser compares it."
+  [k]
+  (let [n (.toLowerCase (name k) Locale/ROOT)]
+    (or (= "href" n) (str/starts-with? n "hx-") (str/starts-with? n "data-hx-"))))
+
+(defn link
+  "`(link href attrs? & body)` → an `<a>` to a page of this application that swaps the
+  current page's `<main>` for the target's and pushes its URL, so navigating repaints
+  only what changes (since 0.24.0). The `href` stays: a new tab, a reload, a modified
+  click or a browser without JavaScript navigate as with any link, and Back asks the
+  server for the page again.
+
+  `href` is a path on this origin — `\"/\"` or what `render/local-path?` accepts, as
+  `path-for` answers — or the call is refused: an `hx-get` elsewhere is a dead link,
+  never a navigation. `attrs` (`:class`, `:rel`, `:aria-current`…) are kept, except
+  `href` and every htmx attribute, which are refused, naming none of the values: htmx
+  reads `hx-action`, `hx-config` or `hx-vals` before `hx-get`. A link that needs its own
+  htmx is an `[:a]` the host writes; one that opens elsewhere (`target`, `download`)
+  is not a navigation of this page and has no business here.
+
+  Not for what must load as a document: a download, the sign-in and sign-out links, a
+  page of another site. A page with scripts of its own is answered to such a link with
+  `HX-Redirect`, so it still loads them."
+  [href & more]
+  (when-not (or (= "/" href) (render/local-path? href))
+    (throw (ex-info "web-base: link's href must be a path on this origin" {:wb/link :href})))
+  (let [[attrs body] (if (map? (first more)) [(first more) (rest more)] [nil more])]
+    (when (some link-decides? (keys attrs))
+      (throw (ex-info "web-base: link's attrs may not give an href or an htmx attribute" {:wb/link :attrs})))
+    (into [:a (merge attrs {:href href :hx-get href} link-navigation)] body)))
+
 (def start
   "`(start handler {:port n})` → `{:server s :port n}`."
   server/start)

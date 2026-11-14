@@ -51,6 +51,7 @@
   [{:keys [lang title head scripts header nav content footer request] who :identity}]
   (render/check-scripts! scripts [:scripts])
   (render/check-scripts! (:wb/scripts request) [:wb/scripts])
+  (when (seq (concat (:wb/scripts request) scripts)) (render/mark-scripted! request))
   (let [lang  (or lang (:wb/locale request))
         nonce (:wb/nonce request)
         body  (render/html (list (when header [:header.wb-header header])

@@ -63,6 +63,41 @@
           content
           (reverse (take-last height stack))))
 
+(defn mark-scripted!
+  "Called by the shell when the page it renders loads scripts of its own — the route's
+  `:wb/scripts` or a `:scripts` slot — so `response` knows the page cannot be swapped
+  in: htmx inserts the body it is answered with, never the `<head>` that loads them.
+  The middleware gives each request the flag; a request without one marks nothing."
+  [request]
+  (some-> (::scripted request) (vreset! true)))
+
+(defn- own-location
+  "The request's own path and query, from the route it matched, never from `:uri`:
+  nil when no route matched or the path is not one of this origin's."
+  [request]
+  (when-let [path (:path (:reitit.core/match request))]
+    (when (or (= "/" path) (local-path? path))
+      (cond-> path (:query-string request) (str "?" (:query-string request))))))
+
+(defn- swapped-whole?
+  "An htmx GET that swaps the page itself — its `<main>`, as `wb/link` does, or its
+  `<body>`, as Back does — with the whole document it is answered with. Not another
+  method, whose answer a GET of the same path would not repeat, nor a form `rerender`
+  shows again (it arrives as a GET); not a swap of some other element that merely
+  selects from the document (`hx-select`, which also asks for all of it), whose page
+  stays the one already loaded. htmx names its target `tag#id`. Back arrives without
+  `HX-Request` or `HX-Target`: htmx 4 builds the restore's request headers anew, with
+  `HX-History-Restore-Request` alone (measured in the bundled build)."
+  [request]
+  (and (= :get (:request-method request))
+       (not (contains? request :wb/form))
+       (or (= "true" (get-in request [:headers "hx-request"]))
+           (= "true" (get-in request [:headers "hx-history-restore-request"])))
+       ;; Read, not inferred: `Vary` names this header, so a cache keeps the redirect
+       ;; apart from the page a navigation gets.
+       (= "full" (get-in request [:headers "hx-request-type"]))
+       (contains? #{nil "main" "body"} (some->> (get-in request [:headers "hx-target"]) (re-find #"^[^#]*")))))
+
 (defn response
   "Renders a Hiccup `:body` through `stack`; leaves any other body untouched.
   A page request (not an htmx fragment) gets the whole stack unless the
@@ -87,15 +122,21 @@
                          (and page? (= height total)) (str doctype))
               headers  (:headers response {})]
           (when rotates? (security/check-rotated-render request document))
-          (-> (strip response)
-              (assoc :body document)
-              (assoc :headers
-                     (cond-> (assoc headers "Vary" htmx/vary)
-                       (not (header-present? headers "content-type"))
-                       (assoc "Content-Type" "text/html; charset=utf-8")))
-              ;; A fragment cannot replace the token in `<body>`'s hx-headers; the page
-              ;; around it must be reloaded to carry the rotated session's.
-              (cond-> (and rotates? (not page?)) htmx/refresh)))))))
+          (if-let [location (and (some-> (::scripted request) deref) (= 200 (:status response 200)) (swapped-whole? request)
+                                 (own-location request))]
+            ;; A page with scripts of its own is loaded as a document, so its head runs.
+            (-> (strip response)
+                (assoc :body "")
+                (assoc :headers (merge headers (:headers (htmx/redirect location)) {"Vary" htmx/vary})))
+            (-> (strip response)
+                (assoc :body document)
+                (assoc :headers
+                       (cond-> (assoc headers "Vary" htmx/vary)
+                         (not (header-present? headers "content-type"))
+                         (assoc "Content-Type" "text/html; charset=utf-8")))
+                ;; A fragment cannot replace the token in `<body>`'s hx-headers; the page
+                ;; around it must be reloaded to carry the rotated session's.
+                (cond-> (and rotates? (not page?)) htmx/refresh))))))))
 
 (def middleware
   "reitit middleware. Compiled per route so the layout stack is read from the
@@ -110,5 +151,6 @@
                     scripts (not-empty (vec (distinct scripts)))]
                 (fn [handler]
                   (fn [request]
-                    (let [request (if scripts (assoc request :wb/scripts scripts) (dissoc request :wb/scripts))]
+                    (let [request (-> (if scripts (assoc request :wb/scripts scripts) (dissoc request :wb/scripts))
+                                      (assoc ::scripted (volatile! false)))]
                       (response request (handler request) stack))))))})

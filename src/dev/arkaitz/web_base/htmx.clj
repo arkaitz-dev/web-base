@@ -4,10 +4,12 @@
   page, and the redirect response the gate answers with. The error renderer is
   the third place and it calls `partial-request?` rather than reading headers.
 
-  Verified against htmx 4.0.0: `HX-Request` is sent on every htmx request, and
-  `HX-Request-Type` says `full` when the swap targets the whole document — a
-  history restore, a body-targeted swap — and `partial` otherwise. Deciding on
-  `HX-Request` alone would hand a bare fragment to the back button.")
+  Verified against htmx 4.0.0: `HX-Request` is sent on every htmx request but a history
+  restore, whose headers htmx builds anew with `HX-History-Restore-Request` alone, and
+  `HX-Request-Type` says `full` when the swap targets the whole document — a restore, a
+  body-targeted swap, an `hx-select` — and `partial` otherwise. A restore therefore reads
+  as a navigation, as it must; deciding on `HX-Request` alone would hand a bare fragment
+  to any other `full` request.")
 
 (def vary
   "Value of the `Vary` header for any response whose shape depends on the

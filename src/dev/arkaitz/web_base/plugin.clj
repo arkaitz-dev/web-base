@@ -2,7 +2,8 @@
   "Plugins: values the host passes under `:plugins`, merged into its config as data. The
   base discovers nothing and calls no plugin on its own — a plugin is the same keys a
   host writes, prepared by a library: routes, sessionless routes, a dictionary, an asset
-  root and its stylesheets, and at most one subject function, login path and session.
+  root with its stylesheets and scripts, and at most one subject function, login path
+  and session.
   `expand` answers the plain config they stand for, and that is all `handler` builds
   from, so what a plugin does is inspectable at the REPL.
 
@@ -13,6 +14,9 @@
     refused (the last two by `handler`, which checks the host's own too). Stylesheets come
     in plugin order and the host's last, so the host's cascade wins. A plugin names one
     asset root, `{:path … :root …}`; the host's `:assets` is a vector of them.
+  - `:scripts` (since 0.25.0) are a union in the same order, each a plain path under the
+    plugin's own `:assets` path — no dot segment, which a browser would resolve out of
+    it. The shell loads them on every page, so they never make a page its own.
   - `:i18n :dict`: only the locales the host speaks are taken from a plugin's dictionary
     — `:i18n :locales`, or the `:default-locale` alone — so a plugin never adds a
     language to the site (since 0.12.0). Each plugin owns the keys it brings under each
@@ -26,10 +30,11 @@
   - A plugin's routes are top-level siblings of the host's: they carry their own
     `:wb/layouts` and `:wb/gate`, and inherit none of the host's."
   (:require [clojure.string :as str]
-            [dev.arkaitz.web-base.i18n :as i18n]))
+            [dev.arkaitz.web-base.i18n :as i18n]
+            [dev.arkaitz.web-base.render :as render]))
 
 (def ^:private plugin-keys
-  #{:wb.plugin/name :routes :sessionless :assets :stylesheets :i18n :subject-fn :login-path :session})
+  #{:wb.plugin/name :routes :sessionless :assets :stylesheets :scripts :i18n :subject-fn :login-path :session})
 
 (def ^:private scalar-keys [:subject-fn :login-path :session])
 
@@ -68,6 +73,10 @@
     (when-not (and (string? root) (not (str/blank? root)))
       (fail! "an asset :root is a classpath prefix" (conj where :root)))))
 
+(def ^:private dot-segment
+  "A `.` or `..` segment, spelt or percent-encoded, as a browser resolves it."
+  #"(?i)/(?:\.|%2e){1,2}(?:/|$|[?#])")
+
 (defn- check-plugin! [i p]
   (when-not (map? p)
     (fail! (str "plugin " i " is not a map") [:plugins i]))
@@ -87,6 +96,16 @@
             (fail! (str "plugin " named " lists stylesheet " (pr-str href) " outside its own :assets path "
                         (pr-str prefix))
                    [:plugins i :stylesheets])))))
+    (when-let [scripts (:scripts p)]
+      (let [prefix (get-in p [:assets :path])]
+        (doseq [src scripts]
+          (when-not (and prefix (string? src) (str/starts-with? src prefix))
+            (fail! (str "plugin " named " lists script " (pr-str src) " outside its own :assets path " (pr-str prefix))
+                   [:plugins i :scripts]))
+          (when-not (and (render/local-path? src) (not (re-find dot-segment src)))
+            (fail! (str "plugin " named " lists script " (pr-str src) ", which is not a plain path under "
+                        (pr-str prefix) ": no backslash, space, control character or dot segment")
+                   [:plugins i :scripts])))))
     (when-let [i18n (:i18n p)]
       (when-not (and (= #{:dict} (set (keys i18n))) (map? (:dict i18n)) (every? map? (vals (:dict i18n))))
         (fail! (str "plugin " named " brings :i18n as {:dict …}; the locale is the host's to choose")
@@ -158,10 +177,12 @@
             (seq sessionless) (assoc :sessionless sessionless)
             dict              (assoc-in [:i18n :dict] dict))
           (let [assets (into (vec (keep :assets plugins)) (:assets config))
-                sheets (into (vec (mapcat :stylesheets plugins)) (:stylesheets config))]
+                sheets (into (vec (mapcat :stylesheets plugins)) (:stylesheets config))
+                scripts (into (vec (mapcat :scripts plugins)) (:scripts config))]
             (cond-> cfg
-              (seq assets) (assoc :assets assets)
-              (seq sheets) (assoc :stylesheets sheets)))
+              (seq assets)  (assoc :assets assets)
+              (seq sheets)  (assoc :stylesheets sheets)
+              (seq scripts) (assoc :scripts scripts)))
           (reduce (fn [cfg k]
                     (let [providers (filter #(some? (get % k)) plugins)]
                       (cond

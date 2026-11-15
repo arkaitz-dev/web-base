@@ -662,12 +662,23 @@
   (when-let [twice (first (for [[p c] (frequencies stylesheets) :when (< 1 c)] p))]
     (throw (ex-info (str "web-base: stylesheet " twice " is given twice") {:config-key [:stylesheets twice]}))))
 
-(defn- wrap-stylesheets
-  "Puts `:wb/stylesheets` on every request, outermost, so the shell links them on a page
-  and on an error page alike."
-  [handler stylesheets]
-  (let [sheets (vec stylesheets)]
-    (fn [request] (handler (assoc request :wb/stylesheets sheets)))))
+(defn- check-site-scripts!
+  "The config's `:scripts`, its plugins' among them: local paths, each given once."
+  [scripts]
+  (render/check-scripts! scripts [:scripts])
+  (when-let [twice (first (for [[p c] (frequencies scripts) :when (< 1 c)] p))]
+    (throw (ex-info (str "web-base: script " twice " is given twice") {:config-key [:scripts twice]}))))
+
+(defn- wrap-page-assets
+  "Puts `:wb/stylesheets` and `:wb/site-scripts` on every request — each only when there
+  is one — outermost, so the shell loads them on a page and on an error page alike."
+  [handler stylesheets scripts]
+  (let [extra (cond-> {}
+                (seq stylesheets) (assoc :wb/stylesheets (vec stylesheets))
+                (seq scripts)     (assoc :wb/site-scripts (vec scripts)))]
+    (if (empty? extra)
+      handler
+      (fn [request] (handler (merge request extra))))))
 
 (defn- build-router
   "The router `handler` answers with, and `router` hands out: one construction, so a
@@ -732,16 +743,19 @@
     :assets       `[{:path \"/name/\" :root \"classpath/prefix\"}]`, served beside `/wb/`,
                   before the session (optional)
     :stylesheets  `[\"/app.css\"]`, linked by the shell after the base's own (optional)
+    :scripts      `[\"/js/app.js\"]`, loaded by the shell on every page, after the base's
+                  own and before a route's `:wb/scripts`, under the CSP nonce; being on
+                  every page, they never stop a `wb/link` swap (optional, since 0.25.0)
     :plugins      values that contribute these same keys, merged by `expand` (optional)
 
   Unknown keys are the host's own business — all but the names above, `:assets`,
-  `:stylesheets` and `:plugins` among them since 0.11.0. Inside the maps the base owns —
+  `:stylesheets` and `:plugins` among them since 0.11.0, `:scripts` since 0.25.0. Inside the maps the base owns —
   `:session`, `:security` and its `:hsts`, `:i18n`, `:static` — an unknown key is
   refused, naming its path. Every failure of a required or malformed value is raised
   here, at construction."
   [config]
   (let [{:keys [routes coercion subject-fn login-path static error-layout i18n security csrf sessionless
-                max-body-bytes assets stylesheets]
+                max-body-bytes assets stylesheets scripts]
          :as   config} (plugin/expand config)]
   (require-key! config :routes)
   (require-key! config :session)
@@ -773,6 +787,7 @@
     (check-gates-wired! router)
     (check-login-path! router login-path)
     (check-assets! assets stylesheets router sessionless)
+    (check-site-scripts! scripts)
     (let [body-limit    (or max-body-bytes security/default-max-body-bytes)
           multipart-for (multipart-spec router body-limit)]
     ;; The router rides on the handler's metadata, where `reitit.ring/get-router` and
@@ -807,7 +822,7 @@
         (cond-> (:proxy-hops security) (security/wrap-proxy (:proxy-hops security)))
         (security/wrap-headers security)
         (log/wrap-request-id (logged-path router))
-        (cond-> (seq stylesheets) (wrap-stylesheets stylesheets))
+        (wrap-page-assets stylesheets scripts)
         (with-meta {::r/router router}))))))
 
 (def translator

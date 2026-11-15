@@ -12,7 +12,10 @@
   through `hx-headers:inherited` on `<body>` (SPEC §15) — htmx 4 inherits
   nothing without the modifier. `:scripts` — local paths, after the route's own
   `:wb/scripts` — is a deferred `<script>` each, under the request's nonce (since
-  0.22.0); a `<script>` the host writes into `:head` itself needs its own `nonce`.
+  0.22.0); a `<script>` the host writes into `:head` itself needs its own `nonce`. The
+  config's `:scripts` and its plugins' (since 0.25.0) load before both, on every page:
+  every page has them in its head, so they never make the page its own, and a
+  `wb/link` swap of it stays a swap.
 
   The token goes on `<body>` only when the page uses it: when the rendered body
   carries an htmx attribute (`hx-…` or `data-hx-…`), or when its content already
@@ -71,7 +74,7 @@
       (when title [:title title])
       [:link {:rel "stylesheet" :href css-path}]
       (for [href (:wb/stylesheets request)] [:link {:rel "stylesheet" :href href}])
-      (for [src (distinct (concat [htmx-path nav-path] (:wb/scripts request) scripts))]
+      (for [src (distinct (concat [htmx-path nav-path] (:wb/site-scripts request) (:wb/scripts request) scripts))]
         [:script (cond-> {:src src :defer true} nonce (assoc :nonce nonce))])
       head]
      [:body (cond-> {} token (assoc (keyword "hx-headers:inherited") (csrf-headers token)))

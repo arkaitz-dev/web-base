@@ -59,7 +59,7 @@
 ;; --- 2 · refusals ------------------------------------------------------------------------
 
 (def ^:private TAKES
-  "[:assets :i18n :login-path :routes :session :sessionless :stylesheets :subject-fn :wb.plugin/name]")
+  "[:assets :i18n :login-path :routes :scripts :session :sessionless :stylesheets :subject-fn :wb.plugin/name]")
 
 (deftest every-plugin-refusal-names-what-and-where--message-and-config-key-exact
   (let [ok  {:wb.plugin/name :a}

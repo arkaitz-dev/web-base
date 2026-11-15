@@ -5,6 +5,25 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.25.0 — 2026-11-15
+
+Scripts every page loads, so a page that has one stays swappable.
+
+- A plugin takes `:scripts`, local paths under its own `:assets` path, refused as its
+  `:stylesheets` are — outside its path, or with no path — and also with a backslash, a
+  space, a control character or a `.`/`..` segment, spelt or percent-encoded, naming the
+  plugin and the path. The config's top-level `:scripts` is the same key for the host, so
+  a plugin still brings only keys a host could write; it was ignored before.
+- `expand` merges them in plugin order, the config's last; `handler` refuses one that is
+  not a local path, or given twice. The shell loads them on every page and error page it
+  draws, after `/wb/nav.js` and before a route's `:wb/scripts` and the `:scripts` slot,
+  each a deferred `<script>` under the request's nonce, a path the route also names loaded
+  once.
+- They never make a page one with scripts of its own: a whole-page htmx GET of a page that
+  has only these is answered with the document, not `HX-Redirect`, because every page's
+  `<head>` already loads them. A route's `:wb/scripts` and the `:scripts` slot redirect as
+  in 0.24.0.
+
 ## 0.24.0 — 2026-11-14
 
 Links between pages repaint only `<main>`.

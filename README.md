@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.24.0"}
+dev.arkaitz/web-base {:mvn/version "0.25.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -310,6 +310,7 @@ cookie again, which that store could never revoke anyway.
 | `:max-body-bytes` | the largest request body read, `200000` by default — counted however it is sent, with a length or without; past it, a 413 (since 0.10.0) |
 | `:assets` | `[{:path "/name/" :root "classpath/prefix"}]`: resource roots served beside `/wb/`, before the session, with 304s; a path is one lower-case segment, never `/wb/`, never covering a route or a sessionless path (since 0.11.0). A root serves every resource under its classpath prefix, so a prefix that also holds migrations or configuration serves them too: give scripts and images a prefix of their own, `app/js` at `/js/`. A host's `:static` already serves `public/` with the same revalidation |
 | `:stylesheets` | `["/app.css"]`: linked by the shell after `wb.css`, a plugin's before the host's, on every page and error page drawn with the shell (since 0.11.0) |
+| `:scripts` | `["/js/app.js"]`: loaded by the shell on every page and error page it draws, after `/wb/nav.js` and before a route's `:wb/scripts`, each deferred under the CSP nonce, a plugin's before yours; local paths, each given once. A page loads them whatever it is, so they never make it a page with scripts of its own: a `wb/link` swap of it stays a swap (since 0.25.0) |
 | `:plugins` | values contributing the keys above; see "Plugins" (since 0.11.0) |
 
 Every malformed or missing required value fails at construction, naming the key, and
@@ -326,8 +327,8 @@ itself, at the first cookie it writes.
 ### Plugins
 
 A plugin is a value a library prepares from the keys you would otherwise write
-yourself — routes, sessionless routes, a dictionary, an asset root and its stylesheets,
-and at most one `:subject-fn`, `:login-path` and `:session` — and you hand it over:
+yourself — routes, sessionless routes, a dictionary, an asset root with its stylesheets
+and scripts, and at most one `:subject-fn`, `:login-path` and `:session` — and you hand it over:
 
 ```clojure
 (wb/handler {:routes  (routes/app db)
@@ -338,7 +339,9 @@ and at most one `:subject-fn`, `:login-path` and `:session` — and you hand it 
 `(wb/expand config)` answers the plain config the plugins stand for; `handler` builds
 from nothing else, so what a plugin adds is one call away at the REPL. The rules:
 routes are yours first, then each plugin's; sessionless paths, asset roots and
-stylesheets are unions, a path given twice refused; each plugin owns the dictionary keys
+stylesheets are unions, a path given twice refused; so are scripts (since 0.25.0), each a
+plain path under the plugin's own asset path — no backslash, space or `.`/`..` segment,
+spelt or percent-encoded, which a browser would resolve out of it; each plugin owns the dictionary keys
 it brings per locale, and your `:i18n :dict` is merged over them key by key, so you can
 reword any string a plugin ships; `:default-locale`, `:locales` and `:locale-fn` are
 yours alone, and a plugin's dictionary is taken only in the languages you list — an
@@ -811,7 +814,11 @@ After the swap the base's `/wb/nav.js` moves the focus to `<main>`, which carrie
   `response/attachment`), the sign-in and sign-out links, another site.
 - **A page with scripts of its own** — the route's `:wb/scripts` or a `:scripts` slot —
   answers a link's swap, and Back into it, with `HX-Redirect` to itself, so its `<head>`
-  runs: the browser loads it. Only a GET that swaps `<main>` or `<body>` is answered so;
+  runs: the browser loads it. A script every page needs — a component library's
+  behaviour — goes in the config's or a plugin's `:scripts` instead (since 0.25.0): every
+  page then loads it, the page a link swaps in has it already, and the swap stays a swap.
+  Such a script must work on content that arrives after it ran (listen on `document`, or
+  on htmx's swap events), because a swap does not run it again. Only a GET that swaps `<main>` or `<body>` is answered so;
   a form shown again by `rerender`, another method and a swap of another element are not.
 - **What sits outside `<main>` is not repainted**: the header, the nav and the identity
   corner stay as the page that was loaded drew them. A nav that marks the current page, or

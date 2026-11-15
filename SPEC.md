@@ -55,7 +55,7 @@ login and logout are to be standard, brandable and used as a whole in every proj
 made the wiring every host repeated a thing to ship once. It ships without crossing the
 line above: a plugin is **a value the host passes** (`:plugins [...]`), made of the same
 keys a host writes — routes, sessionless routes, a dictionary, an asset root and its
-stylesheets, at most one subject function, login path and session. `expand` merges them
+stylesheets (and, since 0.25.0, its scripts), at most one subject function, login path and session. `expand` merges them
 into the plain config by fixed rules, refusing every collision by name, and the host's
 own keys win. The base discovers nothing, registers nothing, runs no plugin lifecycle
 and accepts no middleware or hook from one: it never calls a plugin that the host did
@@ -514,7 +514,10 @@ repaints only `<main>`: `wb/link` asks for the whole page with `hx-select`, so n
 server-side tells a link from a navigation, and htmx takes `<main>` and the title. What
 htmx cannot do is run the `<head>` it is answered with, so a page that loads scripts of its
 own answers such a swap — and Back into it — with `HX-Redirect` to itself, decided by the
-shell that rendered it, never by the link. `hx-boost` was rejected: it swaps `<body>`'s
+shell that rendered it, never by the link. *Amended 2026-11-15 (0.25.0):* scripts every
+page loads — the config's `:scripts`, a plugin's under its own asset path — are not a
+page's own: every `<head>` has them, so a swap loses nothing and stays a swap; a plugin's
+`:scripts` joins the keys of §3's amendment. `hx-boost` was rejected: it swaps `<body>`'s
 content and leaves `<body>`'s token behind, runs scripts under another response's nonce, and
 captures downloads.
 

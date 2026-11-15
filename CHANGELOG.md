@@ -14,6 +14,12 @@ Scripts every page loads, so a page that has one stays swappable.
   space, a control character or a `.`/`..` segment, spelt or percent-encoded, naming the
   plugin and the path. The config's top-level `:scripts` is the same key for the host, so
   a plugin still brings only keys a host could write; it was ignored before.
+- **A plugin's `:stylesheets` are now refused as its `:scripts` are**: a path with a
+  backslash, a space, a control character or a `.`/`..` segment, spelt or percent-encoded,
+  no longer passes for being under the plugin's `:assets` path. Before, `/ui/../app.css`
+  started with `/ui/` and was linked, and a browser resolved it to `/app.css`, outside the
+  plugin's own files. A plugin listing such a path now fails at boot naming it; the
+  plugins of this set list plain paths and are unaffected.
 - `expand` merges them in plugin order, the config's last; `handler` refuses one that is
   not a local path, or given twice. The shell loads them on every page and error page it
   draws, after `/wb/nav.js` and before a route's `:wb/scripts` and the `:scripts` slot,

@@ -399,3 +399,17 @@
                            :session {:key KEY}})]
       (app (mock/request :get "/"))
       (is (nil? @seen) "with no stylesheets from anyone, the request carries no :wb/stylesheets key"))))
+
+(deftest a-plugin-stylesheet-is-a-plain-path-under-its-own-asset-root-as-a-script-is
+  (let [ok  {:wb.plugin/name :a :assets {:path "/a/" :root "x"}}
+        exp #(attempt (fn [] (plugin/expand {:routes [] :plugins [(assoc ok :stylesheets %)]})))
+        why #(str "web-base: plugin :a lists stylesheet " (pr-str %) ", which is not a plain path under \"/a/\":"
+                  " no backslash, space, control character or dot segment")]
+    (is (= ::built (exp ["/a/x.css" "/a/.x.css" "/a/..x.css" "/a/x/y.css?v=1"]))
+        "control: paths under the root, dots inside a name, build")
+    (doseq [[label href] [["a climb out of the root, which a browser resolves to /x.css" "/a/../x.css"]
+                          ["a percent-encoded climb, which a browser resolves too" "/a/%2E%2e/x.css"]
+                          ["a single dot segment" "/a/./x.css"]
+                          ["a backslash, which a browser reads as a slash" "/a/\\x.css"]
+                          ["a space" "/a/x y.css"]]]
+      (is (= [(why href) {:config-key [:plugins 0 :stylesheets]}] (exp [href])) (str "refused: " label)))))

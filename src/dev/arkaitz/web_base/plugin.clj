@@ -77,6 +77,21 @@
   "A `.` or `..` segment, spelt or percent-encoded, as a browser resolves it."
   #"(?i)/(?:\.|%2e){1,2}(?:/|$|[?#])")
 
+(defn- check-paths!
+  "Refuses a path of the plugin's `k` that is not a plain path under its own `:assets`
+  path: one outside it, or one a browser would resolve out of it — a dot segment, spelt or
+  percent-encoded, or a backslash — or that holds a space or a control character."
+  [p i named k noun]
+  (let [prefix (get-in p [:assets :path])]
+    (doseq [path (k p)]
+      (when-not (and prefix (string? path) (str/starts-with? path prefix))
+        (fail! (str "plugin " named " lists " noun " " (pr-str path) " outside its own :assets path " (pr-str prefix))
+               [:plugins i k]))
+      (when-not (and (render/local-path? path) (not (re-find dot-segment path)))
+        (fail! (str "plugin " named " lists " noun " " (pr-str path) ", which is not a plain path under "
+                    (pr-str prefix) ": no backslash, space, control character or dot segment")
+               [:plugins i k])))))
+
 (defn- check-plugin! [i p]
   (when-not (map? p)
     (fail! (str "plugin " i " is not a map") [:plugins i]))
@@ -89,23 +104,8 @@
              [:plugins i (first unknown)]))
     (when-let [assets (:assets p)]
       (check-asset! assets [:plugins i :assets]))
-    (when-let [sheets (:stylesheets p)]
-      (let [prefix (get-in p [:assets :path])]
-        (doseq [href sheets]
-          (when-not (and prefix (string? href) (str/starts-with? href prefix))
-            (fail! (str "plugin " named " lists stylesheet " (pr-str href) " outside its own :assets path "
-                        (pr-str prefix))
-                   [:plugins i :stylesheets])))))
-    (when-let [scripts (:scripts p)]
-      (let [prefix (get-in p [:assets :path])]
-        (doseq [src scripts]
-          (when-not (and prefix (string? src) (str/starts-with? src prefix))
-            (fail! (str "plugin " named " lists script " (pr-str src) " outside its own :assets path " (pr-str prefix))
-                   [:plugins i :scripts]))
-          (when-not (and (render/local-path? src) (not (re-find dot-segment src)))
-            (fail! (str "plugin " named " lists script " (pr-str src) ", which is not a plain path under "
-                        (pr-str prefix) ": no backslash, space, control character or dot segment")
-                   [:plugins i :scripts])))))
+    (check-paths! p i named :stylesheets "stylesheet")
+    (check-paths! p i named :scripts "script")
     (when-let [i18n (:i18n p)]
       (when-not (and (= #{:dict} (set (keys i18n))) (map? (:dict i18n)) (every? map? (vals (:dict i18n))))
         (fail! (str "plugin " named " brings :i18n as {:dict …}; the locale is the host's to choose")

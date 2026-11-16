@@ -77,19 +77,19 @@
                     [(ex-message e) (ex-data e) (count @log)]))]
     (doseq [method [:post :put :patch :delete]
             [who browser] [["signed in" b] ["anonymous" (testing/browser app)]]]
-      (is (= [(str "web-base: a request to /echo is sent by htmx or by a fetch, not both — pass one of"
-                   " {:htmx? true} and {:fetch? true}")
+      (is (= [(str "web-base: a request to /echo is sent by one of an htmx swap, a followed link or a fetch — pass one of"
+                   " {:htmx? true}, {:link? true} and {:fetch? true}")
               {:path "/echo" :method method} 0]
              (refused browser method {:htmx? true :fetch? true}))
           (str who " " method ": refused, naming the path and the method, before anything is sent")))
     (is (= [nil nil 1] (refused b :post {:fetch? true})) "control: the same call with only :fetch? is sent once")
-    (is (= [(str "web-base: visit writes the x-csrf-token header itself — pass the jar, the token, {:htmx? true} or"
-                 " {:fetch? true} instead of setting it")
+    (is (= [(str "web-base: visit writes the x-csrf-token header itself — pass the jar, the token, {:htmx? true},"
+                 " {:link? true} or {:fetch? true} instead of setting it")
             {:path "/echo" :header "x-csrf-token"} 0]
            (refused b :post {:fetch? true :headers {"X-CSRF-Token" "forged"}}))
         "the header a fetch carries cannot be set by hand")
-    (is (= [(str "web-base: a request to /x is sent by htmx or by a fetch, not both — pass one of"
-                 " {:htmx? true} and {:fetch? true}")
+    (is (= [(str "web-base: a request to /x is sent by one of an htmx swap, a followed link or a fetch — pass one of"
+                 " {:htmx? true}, {:link? true} and {:fetch? true}")
             {:path "/x" :method :delete}]
            (try (testing/visit b :delete "/x" nil {:htmx? true :fetch? true :files {"f" {:filename "a" :bytes (byte-array 1)}}}) nil
                 (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))

@@ -22,6 +22,14 @@
   a host's test sends to stand in for one. `partial-request?` answers true."
   {"hx-request" "true" "hx-request-type" "partial"})
 
+(def link-headers
+  "The request headers htmx 4 sends when a `link` is followed, as Ring delivers them: a
+  whole-page GET (`hx-select` asks for the whole document) swapped into `<main>`, which
+  htmx names by its tag since it has no id. What a host's test sends to stand in for a
+  click (`testing/visit` with `{:link? true}`, since 0.26.0); a page that loads scripts
+  of its own answers it with `HX-Redirect` to itself."
+  {"hx-request" "true" "hx-request-type" "full" "hx-target" "main"})
+
 (defn partial-request?
   "True when htmx asked for a fragment rather than a whole document. Ring
   lowercases request header names."

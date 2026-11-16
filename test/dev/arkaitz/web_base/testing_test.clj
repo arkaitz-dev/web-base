@@ -487,24 +487,24 @@
 
 (deftest visit-refuses-each-header-it-owns-by-name-before-sending--and-a-foreign-one-in-any-case-goes-through
   (let [{:keys [app log]} (browser-app)
-        owned #{"host" "cookie" "content-type" "content-length" "x-csrf-token" "hx-request" "hx-request-type"}
+        owned #{"host" "cookie" "content-type" "content-length" "x-csrf-token" "hx-request" "hx-request-type" "hx-target"}
         refusal (fn [b method headers opts]
                   (reset! log [])
                   (let [e (try (testing/visit b method "/echo" {:x "1"} (assoc opts :headers headers)) nil
                                (catch clojure.lang.ExceptionInfo e e))]
                     [(ex-message e) (ex-data e) (count @log)]))
         expected (fn [h] [(str "web-base: visit writes the " h " header itself — pass the jar, the token,"
-                               " {:htmx? true} or {:fetch? true} instead of setting it")
+                               " {:htmx? true}, {:link? true} or {:fetch? true} instead of setting it")
                           {:path "/echo" :header h} 0])
         b (signed-in app)]
     (is (= owned (into #{"host" "cookie" "content-type" "content-length" (str/lower-case security/csrf-header)}
-                       (keys htmx/fragment-headers)))
+                       (concat (keys htmx/fragment-headers) (keys htmx/link-headers))))
         "witness: the list below is every header visit writes, read from where visit reads it")
     (is (string? (:token b)) "witness: the browser holds a token, so no refusal below is the missing-token one")
     (doseq [h (sort owned)
             :let [spelling ({"host" "Host" "cookie" "Cookie" "content-type" "Content-Type"
                              "content-length" :Content-Length "x-csrf-token" "X-CSRF-Token"
-                             "hx-request" "HX-Request" "hx-request-type" "Hx-Request-Type"} h)]]
+                             "hx-request" "HX-Request" "hx-request-type" "Hx-Request-Type" "hx-target" "HX-Target"} h)]]
       (is (= (expected h) (refusal b :post {spelling "x"} nil))
           (str spelling ": refused by its lower-case name, before anything was sent")))
     (is (= (expected "x-csrf-token") (refusal b :post {"X-CSRF-Token" "forged"} {:htmx? true}))
@@ -552,3 +552,31 @@
   (is (= [] (testing/header-values {} "Location")) "absent is empty, never nil")
   (is (= "/there" (testing/location {:status 303 :headers {"location" "/there"}})) "the Location, whatever its case")
   (is (nil? (testing/location {:status 200 :headers {}})) "or nil"))
+
+(deftest visit-follows-a-link-as-htmx-does--a-scripted-page-sends-it-to-load-itself--another-swaps
+  ;; academy's FRICTION U-B6: a host built this request by hand to test the scripted-page
+  ;; fallback. {:link? true} sends what htmx 4 sends when a wb/link is followed.
+  (let [app (wb/handler {:session {:key KEY}
+                         :routes  [["/h" {:get (fn [r] {:status 200 :body (pr-str (into (sorted-map) (filter #(str/starts-with? (key %) "hx-")) (:headers r)))})}]
+                                   ["/scripted" {:wb/scripts ["/s.js"] :wb/layouts [shell/page] :get (fn [_] (response/ok [:p "scripted"]))}]
+                                   ["/plain" {:wb/layouts [shell/page] :get (fn [_] (response/ok [:p "plain"]))}]]})
+        b   (testing/browser app)
+        hx  (fn [path] (:response (testing/visit b :get path nil {:link? true})))
+        refused (fn [method opts] (try (testing/visit b method "/h" nil opts) nil (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))]
+    (is (= {"hx-request" "true" "hx-request-type" "full" "hx-target" "main"} (edn/read-string (:body (hx "/h"))))
+        "exactly the headers of a followed link: a whole-page GET into main")
+    (is (= {} (edn/read-string (:body (:response (testing/visit b :get "/h"))))) "control: a plain GET carries none")
+    (let [r (hx "/scripted?x=1")]
+      (is (= [200 "" "/scripted?x=1"] [(:status r) (:body r) (testing/header r "HX-Redirect")])
+          "a page that loads its own script answers with HX-Redirect to itself, its query kept, and an empty body"))
+    (let [r (hx "/plain")]
+      (is (and (= 200 (:status r)) (nil? (testing/header r "HX-Redirect")) (str/starts-with? (:body r) "<!DOCTYPE html>")
+               (str/includes? (:body r) "<p>plain</p>"))
+          "a page that loads none is swapped: the whole document"))
+    (is (= ["web-base: a followed link is a GET, and a POST to /h is not one — {:link? true} goes with :get" {:path "/h" :method :post}]
+           (refused :post {:link? true})))
+    (doseq [other [:htmx? :fetch?]]
+      (is (= ["web-base: a request to /h is sent by one of an htmx swap, a followed link or a fetch — pass one of {:htmx? true}, {:link? true} and {:fetch? true}"
+              {:path "/h" :method :get}]
+             (refused :get {:link? true other true}))
+          (str "with " other)))))

@@ -5,6 +5,25 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.26.0 — 2026-11-16
+
+A test follows a link as htmx does.
+
+- `testing/visit` takes `{:link? true}`: a GET with `htmx/link-headers` — `HX-Request:
+  true`, `HX-Request-Type: full`, `HX-Target: main`, what htmx 4 sends when a `wb/link` is
+  followed — through the browser's jar. A page that loads scripts of its own answers it
+  with `HX-Redirect` to itself, left in the response; another is answered with the whole
+  document. Asked for by academy (FRICTION U-B6), which built that request by hand.
+- `htmx/link-headers`, beside `fragment-headers`.
+- `{:link? true}` goes with `:get` only, and with neither `{:htmx? true}` nor `{:fetch?
+  true}`: each is refused by name before anything is sent. `hx-target` is now among the
+  headers `visit` writes itself, so `:headers` cannot set it. The refusals' wording names
+  the new option; a test that pinned the old text of the htmx-and-fetch refusal, or of a
+  header `visit` owns, reads the new one.
+
+**In your app:** nothing is required. A test that builds a link's request by hand can
+become `(testing/visit b :get path nil {:link? true})`.
+
 ## 0.25.0 — 2026-11-15
 
 Scripts every page loads, so a page that has one stays swappable.

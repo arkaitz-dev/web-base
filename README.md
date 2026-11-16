@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.25.0"}
+dev.arkaitz/web-base {:mvn/version "0.26.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -735,7 +735,10 @@ POST, PUT or PATCH. A POST carries the token as its hidden field; `{:htmx? true}
 as the header with the headers of a swap, and leaves an `HX-Redirect` for the test to
 read; `{:fetch? true}` (since 0.22.0) sends it as the header alone, as a page's script
 does with `fetch` and `security/csrf-meta`, so the answer is the whole page. A PUT, PATCH
-or DELETE needs one of the two, since no browser form sends one. Each
+or DELETE needs one of the two, since no browser form sends one. `{:link? true}` (since
+0.26.0) sends a GET as htmx does when a `wb/link` is followed — `htmx/link-headers`, a
+whole-page request swapped into `<main>` — so a test reads a scripted page's `HX-Redirect`
+to itself, or another page's whole document, with the jar's session. Each
 also sends `Sec-Fetch-Site: same-origin` and `Origin: http://localhost` (since 0.21.0), as
 a browser does from the site's own page — what an anonymous session is checked by; a test
 of a refusal overrides them with `:headers`. After a sign-in the session holds a token

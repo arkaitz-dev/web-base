@@ -10,12 +10,13 @@
 // address bar's is aria-current=page, and no other is: page means this very page, and in
 // the chrome it is this script's. A section a page belongs to is the host's to mark, as
 // aria-current="true" or "location", which is left as it is ("false" counts as no mark).
-// A link to a fragment or to a query of the same page ("#…", "?…", "") is no page of its own.
+// A link to a fragment or to a query of the same page ("#…", "?…", "") is no page of its own,
+// and neither is a link to a section of a page ("/p#…"): it never stands for the page itself.
 function markCurrent() {
   document.querySelectorAll(".wb-nav a[href], [data-wb-nav] a[href]").forEach(function (a) {
     var href = a.getAttribute("href");
     if (a.closest("main") || !href || href[0] === "#" || href[0] === "?") return;
-    var here = a.origin === location.origin && a.pathname === location.pathname;
+    var here = a.origin === location.origin && a.pathname === location.pathname && !a.hash;
     var mark = a.getAttribute("aria-current");
     if (here && (!mark || mark === "false")) a.setAttribute("aria-current", "page");
     if (!here && mark === "page") a.removeAttribute("aria-current");

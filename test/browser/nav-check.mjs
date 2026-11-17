@@ -23,12 +23,12 @@ const check = async (name, f, pass) => {
 const marks = () => p.evaluate(() => Object.fromEntries([...document.querySelectorAll('a[id]')].map(a => [a.id, a.getAttribute('aria-current')])));
 const at = (path) => p.waitForFunction(path => location.pathname === path, path).then(() => p.waitForTimeout(150));
 const only = (m, id) => ['nav-a', 'nav-b', 'nav-c'].every(k => (m[k] === 'page') === (k === id));
-const kept = (m, c) => m['nav-section'] === 'true' && m['nav-fragment'] === null && m['nav-query'] === null && m['nav-elsewhere'] === null && m['main-c'] === null
+const kept = (m, c) => m['nav-section'] === 'true' && m['nav-fragment'] === null && m['nav-query'] === null && m['nav-section-of-a'] === null && m['nav-elsewhere'] === null && m['main-c'] === null
   && (c === undefined || m['nav-c'] === c);
 
 await p.goto(base + '/a');
 await p.evaluate(() => { window.__loaded = 1; });
-await check('on load: the page is marked, a host\'s section and false marks, a fragment, a query and another origin\'s same path are not', marks,
+await check('on load: the page is marked, a host\'s section and false marks, a fragment, a query, a section of the page and another origin\'s same path are not', marks,
   m => only(m, 'nav-a') && kept(m, 'false'));
 await check('a nav link swaps <main> and the mark follows, without a reload', async () => {
   await p.locator('#nav-b').click(); await at('/b');

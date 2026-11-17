@@ -3,6 +3,7 @@
   `/wb/nav.js` — the chrome's current page following `wb/link` swaps, Back and Forward.
   `clojure -M:nav-probe [port]`. The nav holds every kind of link the script must judge:
   pages, a host's own section mark, a `false` mark, a fragment and a query of the same page,
+  a link to a section of page A,
   and another origin's link to the same path."
   (:require [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.response :as response]
@@ -18,6 +19,7 @@
                                       [:a {:id "nav-section" :href "/a" :aria-current "true"} "Section"]
                                       [:a {:id "nav-fragment" :href "#top"} "Top"]
                                       [:a {:id "nav-query" :href "?q=1"} "Query"]
+                                      [:a {:id "nav-section-of-a" :href "/a#top"} "A's top"]
                                       [:a {:id "nav-elsewhere" :href "http://example.test/a"} "Elsewhere's /a"]))))
 
 (defn- page [label]

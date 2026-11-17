@@ -17,8 +17,9 @@ The chrome's current page follows a swap.
 - The contract: `page` in the chrome is the script's. A section a page belongs to is the
   host's to mark, as `aria-current="true"` or `"location"`, which the script keeps; a
   server-rendered `page` on a chrome link that is not this page is taken off. `"false"`
-  counts as no mark. A link to a fragment (`#…`), a query of the same page (`?…`), an empty
-  href or another origin is never marked.
+  counts as no mark. A link to a fragment (`#…`) or to a section of a page (`/p#…`), a query
+  of the same page (`?…`), an empty href or another origin is never marked: only one link,
+  the page's own, reads as the page.
 - Held in a real engine: `test/browser/nav-check.mjs` runs `clojure -M:nav-probe` (a shell
   with a nav of every kind of link) and `test/resources/nav-checks.edn` records each check,
   held to nav.js's bytes by `nav_checks_test`.

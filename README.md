@@ -25,7 +25,7 @@ clinic's appointment book need this, unchanged? If not, it does not belong here.
 
 ```clojure
 ;; deps.edn — from Clojars
-dev.arkaitz/web-base {:mvn/version "0.26.0"}
+dev.arkaitz/web-base {:mvn/version "0.27.0"}
 
 ;; or straight from git, to track a commit
 dev.arkaitz/web-base {:git/url "https://github.com/arkaitz-dev/web-base"
@@ -824,8 +824,13 @@ After the swap the base's `/wb/nav.js` moves the focus to `<main>`, which carrie
   on htmx's swap events), because a swap does not run it again. Only a GET that swaps `<main>` or `<body>` is answered so;
   a form shown again by `rerender`, another method and a swap of another element are not.
 - **What sits outside `<main>` is not repainted**: the header, the nav and the identity
-  corner stay as the page that was loaded drew them. A nav that marks the current page, or
-  a counter in the header, needs `hx-swap-oob` from the page, or a plain `[:a]`.
+  corner stay as the page that was loaded drew them. The current page is the exception
+  (since 0.27.0): `/wb/nav.js` marks it on load and after every swap — in the shell's nav,
+  or in any element outside `<main>` that carries `data-wb-nav`, the link whose path is the
+  address bar's is `aria-current="page"`, and no other is. `page` there is the script's:
+  mark a section a page belongs to as `aria-current="true"` (or `"location"`), which it
+  keeps. A link to a fragment, a query of the same page or another origin is never marked.
+  A counter in the header still needs `hx-swap-oob` from the page.
 
 ### Lifecycle
 

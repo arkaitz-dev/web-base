@@ -5,6 +5,27 @@ changes what a working host sees. A **minor** adds, and may break: when it does,
 opens with **Breaking**, says what a host must change, and the README says "since" beside
 the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged `vX.Y.Z`.
 
+## 0.27.0 — 2026-11-17
+
+The chrome's current page follows a swap.
+
+- `/wb/nav.js` marks the current page on load and after every swap: in the shell's nav
+  (`.wb-nav`) or any element outside `<main>` that carries `data-wb-nav`, the link whose
+  path is the address bar's is `aria-current="page"`, and no other is. A `wb/link` swaps only
+  `<main>`, so until now a mark drawn for the first page stayed there, and no host marked
+  the current page at all; `wb.css` already draws the mark.
+- The contract: `page` in the chrome is the script's. A section a page belongs to is the
+  host's to mark, as `aria-current="true"` or `"location"`, which the script keeps; a
+  server-rendered `page` on a chrome link that is not this page is taken off. `"false"`
+  counts as no mark. A link to a fragment (`#…`), a query of the same page (`?…`), an empty
+  href or another origin is never marked.
+- Held in a real engine: `test/browser/nav-check.mjs` runs `clojure -M:nav-probe` (a shell
+  with a nav of every kind of link) and `test/resources/nav-checks.edn` records each check,
+  held to nav.js's bytes by `nav_checks_test`.
+
+**In your app:** nothing is required. A nav of your own outside the shell's slot takes
+`data-wb-nav` to be followed; a section mark you render as `page` becomes `true`.
+
 ## 0.26.0 — 2026-11-16
 
 A test follows a link as htmx does.

@@ -1,0 +1,16 @@
+;; What test/browser/nav-check.mjs saw of /wb/nav.js, engine by engine, against
+;; `clojure -M:nav-probe`. nav_checks_test holds that every check passed and that the files
+;; below are the bytes they ran against, so a change to any reds until they run again.
+{:checked "2026-11-17"
+ :files {"nav.js" "c6c8de8d726ba268b2c916e9d5ac5aaac1e9bbfad0b6acb70c8cb09ecdc6c5b4"
+         "nav-check.mjs" "5014d0b9056c699659ebdee922c05281635e37717b0eaba6ad2b04a439f4dbe7"
+         "nav_probe.clj" "706eada13d679f822cf654c49d65cecc40af7c5f576024096b9177a24bd15f8e"}
+ :runs [
+  {:engine "chromium" :version "145.0.7632.6"
+   :checks {"on load: the page is marked, a host's section and false marks, a fragment, a query and another origin's same path are not" true
+            "a nav link swaps <main> and the mark follows, without a reload" true
+            "a link inside <main> moves the mark too, and a false mark becomes the page" true
+            "Back marks the page it returns to" true
+            "Forward marks the page it goes to" true
+            "no CSP violation, no script error" true}}]
+ :not-verified ["WebKit: its Playwright build was removed after the 0.6.0 round; a download needs the user's yes" "Firefox: no engine of it on this machine"]}

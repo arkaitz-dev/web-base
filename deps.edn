@@ -42,6 +42,10 @@
                        ch.qos.logback/logback-classic {:mvn/version "1.6.3"}}
          :main-opts   ["-m" "demo.main"]}
 
+  ;; A shell with a nav for test/browser/nav-check.mjs: `clojure -M:nav-probe [port]`.
+  :nav-probe {:extra-paths ["test"]
+              :main-opts   ["-m" "dev.arkaitz.web-base.nav-probe"]}
+
   :dev {:extra-paths ["dev" "demo/src" "demo/resources"]
         :extra-deps  {metosin/reitit-malli           {:mvn/version "0.10.1"}
                       metosin/malli                  {:mvn/version "0.20.1"}

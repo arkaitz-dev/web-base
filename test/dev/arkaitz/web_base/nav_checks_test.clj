@@ -28,7 +28,7 @@
 
 (deftest every-recorded-nav-check-passed
   (let [runs (:runs record)]
-    (is (contains? (set (map :engine runs)) "chromium") "witness: Chromium was run")
+    (is (= #{"chromium" "webkit"} (set (map :engine runs))) "witness: both engines were run")
     (doseq [{:keys [engine checks]} runs]
       (is (<= 6 (count checks)) (str "witness: " engine " recorded its checks, " (count checks)))
       (is (= [] (sort (keep (fn [[check pass]] (when-not (true? pass) check)) checks)))

@@ -12,5 +12,12 @@
             "a link inside <main> moves the mark too, and a false mark becomes the page" true
             "Back marks the page it returns to" true
             "Forward marks the page it goes to" true
+            "no CSP violation, no script error" true}}
+  {:engine "webkit" :version "26.4"
+   :checks {"on load: the page is marked, a host's section and false marks, a fragment, a query and another origin's same path are not" true
+            "a nav link swaps <main> and the mark follows, without a reload" true
+            "a link inside <main> moves the mark too, and a false mark becomes the page" true
+            "Back marks the page it returns to" true
+            "Forward marks the page it goes to" true
             "no CSP violation, no script error" true}}]
  :not-verified ["WebKit: its Playwright build was removed after the 0.6.0 round; a download needs the user's yes" "Firefox: no engine of it on this machine"]}

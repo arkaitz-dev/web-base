@@ -20,4 +20,4 @@
             "Back marks the page it returns to" true
             "Forward marks the page it goes to" true
             "no CSP violation, no script error" true}}]
- :not-verified ["WebKit: its Playwright build was removed after the 0.6.0 round; a download needs the user's yes" "Firefox: no engine of it on this machine"]}
+ :not-verified ["Firefox: no engine of it on this machine"]}

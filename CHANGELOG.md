@@ -7,7 +7,22 @@ the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged 
 
 ## 0.27.0 — 2026-11-17
 
-The chrome's current page follows a swap.
+The chrome's current page follows a swap, and the header spans the window.
+
+**Breaking:** the shell's header is no longer held to the page's column. It spans the
+window, its content `--wb-gap` from the edges; a header that is not a full-width bar moves
+from the column to those edges. `:header-width :measure` gives back the column.
+
+- `shell/page` takes `:header-width`: `:full` (the default) spans the window; `:aligned`
+  spans it with the header's content where `<main>`'s text starts and ends, never nearer
+  the edge than `--wb-gap`; `:measure` is the 48rem column of the rest of the page. Any
+  other value is refused when the page renders, naming the slot, with or without a header.
+- `:aligned` takes its inset from the body's width, which a scrollbar narrows and `100vw`
+  does not, so it lines up with `<main>` beside one; it follows a host's own `--wb-gap` and
+  `--wb-measure`. The header is padded with `--wb-gap`, but for `:aligned`'s inline padding,
+  so a bar that bleeds over `--wb-gap` reaches the header's edges under `:full` (the
+  window's) and `:measure` (the column's); under `:aligned` it reaches the column's edges, or
+  the window's where the window is narrower than the column.
 
 - `/wb/nav.js` marks the current page on load and after every swap: in the shell's nav
   (`.wb-nav`) or any element outside `<main>` that carries `data-wb-nav`, the link whose
@@ -24,8 +39,9 @@ The chrome's current page follows a swap.
   with a nav of every kind of link) and `test/resources/nav-checks.edn` records each check,
   held to nav.js's bytes by `nav_checks_test`.
 
-**In your app:** nothing is required. A nav of your own outside the shell's slot takes
-`data-wb-nav` to be followed; a section mark you render as `page` becomes `true`.
+**In your app:** a header you want in the column takes `:header-width :measure`. A nav of
+your own outside the shell's slot takes `data-wb-nav` to be followed; a section mark you
+render as `page` becomes `true`.
 
 ## 0.26.0 — 2026-11-16
 

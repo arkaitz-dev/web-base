@@ -1,10 +1,12 @@
-;; What test/browser/nav-check.mjs saw of /wb/nav.js, engine by engine, against
-;; `clojure -M:nav-probe`. nav_checks_test holds that every check passed and that the files
-;; below are the bytes they ran against, so a change to any reds until they run again.
-{:checked "2026-11-17"
+;; What test/browser/nav-check.mjs saw of /wb/nav.js and of the header /wb/wb.css lays out,
+;; engine by engine, against `clojure -M:nav-probe`. nav_checks_test holds that every check the
+;; script declares passed and that the files below are the bytes they ran against, so a change to
+;; any reds until they run again.
+{:checked "2026-11-19"
  :files {"nav.js" "a12ffa8cfad4ff1710281890c7a54d8f8c9fe7a11739a090f7dbb86def67fb04"
-         "nav-check.mjs" "cebb171e8271e76711024f8ae3ec91afb4b6fe1c56d053e9e42e45e63d61e380"
-         "nav_probe.clj" "08e9f778f0a6b89cb2cd4a635b8b7e4e5fc4d0fe9be47952b4daded5b04bb434"}
+         "wb.css" "283bec5ce8baa2d005fdf0a3250895d6892a9373e63d6796eb89007d725a925e"
+         "nav-check.mjs" "7cb5b0d0806b2274208e3f945ff6e426863861ec356c6d8b45caedb16a1ff118"
+         "nav_probe.clj" "004ee3f968c4f464a0d63c919ece4bbf241130c1bf6f6eff6b7868057cca52d5"}
  :runs [
   {:engine "chromium" :version "145.0.7632.6"
    :checks {"on load: the page is marked, a host's section and false marks, a fragment, a query, a section of the page and another origin's same path are not" true
@@ -12,6 +14,13 @@
             "a link inside <main> moves the mark too, and a false mark becomes the page" true
             "Back marks the page it returns to" true
             "Forward marks the page it goes to" true
+            "header width, default at 1470: the header spans the window, its content 16px in" true
+            "header width, aligned at 1470: the header spans the window, its content starts and ends with main's text" true
+            "header width, aligned under a host's own gap and measure: its content follows them" true
+            "header width, measure at 1470: the header is the centred 48rem column" true
+            "header width at 360: every mode is the window with a 16px inset, never less" true
+            "header width: a fixed element still stands against the viewport, in every mode" true
+            "header width, beside a 15px scrollbar: the inset follows the body's width, not the viewport's, and a sticky header still sticks" true
             "no CSP violation, no script error" true}}
   {:engine "webkit" :version "26.4"
    :checks {"on load: the page is marked, a host's section and false marks, a fragment, a query, a section of the page and another origin's same path are not" true
@@ -19,5 +28,13 @@
             "a link inside <main> moves the mark too, and a false mark becomes the page" true
             "Back marks the page it returns to" true
             "Forward marks the page it goes to" true
-            "no CSP violation, no script error" true}}]
- :not-verified ["WebKit: its Playwright build was removed after the 0.6.0 round; a download needs the user's yes" "Firefox: no engine of it on this machine"]}
+            "header width, default at 1470: the header spans the window, its content 16px in" true
+            "header width, aligned at 1470: the header spans the window, its content starts and ends with main's text" true
+            "header width, aligned under a host's own gap and measure: its content follows them" true
+            "header width, measure at 1470: the header is the centred 48rem column" true
+            "header width at 360: every mode is the window with a 16px inset, never less" true
+            "header width: a fixed element still stands against the viewport, in every mode" true
+            "header width, beside a 15px scrollbar: the inset follows the body's width, not the viewport's, and a sticky header still sticks" true
+            "no CSP violation, no script error" true}}
+ ]
+ :not-verified ["Firefox: no engine of it on this machine"]}

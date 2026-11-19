@@ -35,6 +35,29 @@
                 :header [:h1 "H"] :nav [:a {:href "/"} "n"] :identity [:span "me"] :content [:p "c"] :footer [:small "f"]}))
       "each slot in its own container, document order, :head last in <head>, title escaped"))
 
+(defn- doc [body] (str "<html>" HEAD-START ASSETS "</head><body>" body "<main class=\"wb-main\" tabindex=\"-1\"></main></body></html>"))
+
+(deftest header-width-chooses-the-header-class--full-and-absent-emit-today's-header--and-no-header-emits-none
+  (doseq [[label slots expected]
+          [["absent"           {:header [:h1 "H"]}                        (doc "<header class=\"wb-header\"><h1>H</h1></header>")]
+           ["nil is absent"    {:header [:h1 "H"] :header-width nil}      (doc "<header class=\"wb-header\"><h1>H</h1></header>")]
+           [":full"            {:header [:h1 "H"] :header-width :full}    (doc "<header class=\"wb-header\"><h1>H</h1></header>")]
+           [":aligned"         {:header [:h1 "H"] :header-width :aligned} (doc "<header class=\"wb-header wb-header--aligned\"><h1>H</h1></header>")]
+           [":measure"         {:header [:h1 "H"] :header-width :measure} (doc "<header class=\"wb-header wb-header--measure\"><h1>H</h1></header>")]
+           [":aligned, no header" {:header-width :aligned}                (str "<html>" SKEL)]
+           [":measure, no header" {:header-width :measure}                (str "<html>" SKEL)]]]
+    (testing label (is (= expected (html slots))))))
+
+(deftest header-width-refuses-anything-but-its-three-keywords--naming-the-slot--even-with-no-header
+  (doseq [v [:full :aligned :measure nil]]
+    (is (string? (html {:header [:h1 "H"] :header-width v})) (str "witness: " (pr-str v) " is accepted, so a refusal below is not every value's")))
+  (doseq [v ["full" "aligned" "measure" :wide :Full 'full 1 false [:full] #{:full} ""]
+          slots [{:header [:h1 "H"] :header-width v} {:header-width v}]]
+    (is (= ["web-base: :header-width is one of :full, :aligned or :measure" {:slot :header-width :value v}]
+           (try (shell/page slots) ::no-throw
+                (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
+        (str (pr-str v) (if (:header slots) " with a header" " with no header")))))
+
 (deftest head-slot-accepts-a-seq-and-is-appended-last
   (is (= (str "<html>" HEAD-START ASSETS "<meta name=\"a\"><link href=\"/i\" rel=\"icon\"></head><body><main class=\"wb-main\" tabindex=\"-1\"></main></body></html>")
          (html {:head (list [:meta {:name "a"}] [:link {:rel "icon" :href "/i"}])}))

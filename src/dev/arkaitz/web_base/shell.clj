@@ -1,6 +1,10 @@
 (ns dev.arkaitz.web-base.shell
   "The page shell as a set of slots the host fills (SPEC §13): `:lang`,
-  `:title`, `:head`, `:scripts`, `:header`, `:nav`, `:identity`, `:content`, `:footer`.
+  `:title`, `:head`, `:scripts`, `:header`, `:header-width`, `:nav`, `:identity`, `:content`,
+  `:footer`. `:header-width` (since 0.27.0) is how wide the header stands: `:full`, the
+  default, spans the window; `:aligned` spans it with its content where `<main>`'s text
+  starts and ends, never nearer the edge than `--wb-gap`; `:measure` is the column the rest
+  of the page keeps.
   It is an ordinary layout — a function of one slot map — usable as the
   outermost entry of a route's `:wb/layouts` or called by the host's own
   layout. Absent slots emit nothing.
@@ -53,14 +57,24 @@
             (re-find htmx-attribute body))
     (security/csrf-token request)))
 
+(def ^:private header-classes
+  {nil "wb-header" :full "wb-header" :aligned "wb-header wb-header--aligned" :measure "wb-header wb-header--measure"})
+
+(defn- header-class
+  "Refused whether or not there is a header: a misspelt width is a mistake either way."
+  [width]
+  (or (get header-classes width)
+      (throw (ex-info "web-base: :header-width is one of :full, :aligned or :measure" {:slot :header-width :value width}))))
+
 (defn page
-  [{:keys [lang title head scripts header nav content footer request] who :identity}]
+  [{:keys [lang title head scripts header header-width nav content footer request] who :identity}]
   (render/check-scripts! scripts [:scripts])
   (render/check-scripts! (:wb/scripts request) [:wb/scripts])
   (when (seq (concat (:wb/scripts request) scripts)) (render/mark-scripted! request))
-  (let [lang  (or lang (:wb/locale request))
+  (let [hclass (header-class header-width)
+        lang  (or lang (:wb/locale request))
         nonce (:wb/nonce request)
-        body  (render/html (list (when header [:header.wb-header header])
+        body  (render/html (list (when header [:header {:class hclass} header])
                                  (when nav [:nav.wb-nav nav])
                                  (when who [:div.wb-identity who])
                                  ;; Focusable from a script, never by Tab: where /wb/nav.js puts the focus after a swap.

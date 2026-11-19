@@ -4,7 +4,10 @@
   `clojure -M:nav-probe [port]`. The nav holds every kind of link the script must judge:
   pages, a host's own section mark, a `false` mark, a fragment and a query of the same page,
   a link to a section of page A,
-  and another origin's link to the same path."
+  and another origin's link to the same path. Under `/hw/<mode>` (and `/hw/<mode>/tall`, a page
+  that overflows, and `/hw/aligned/themed`, whose host redefines `--wb-gap` and `--wb-measure`)
+  it serves the shell's header at each `:header-width`, with `/hw.css`, whose `#hw-bleed` bleeds
+  over the header's `--wb-gap` as uikit's bar does."
   (:require [dev.arkaitz.web-base :as wb]
             [dev.arkaitz.web-base.response :as response]
             [dev.arkaitz.web-base.server :as server]
@@ -26,12 +29,41 @@
   (fn [_] (response/ok [:div [:p {:id "label"} label]
                         (wb/link "/c" {:id "main-c"} "C from main")])))
 
+(def ^:private hw-css
+  (str "#hw-bleed { margin-inline: calc(-1 * var(--wb-gap)); }\n"
+       "#hw-fixed { position: fixed; inset-inline-end: 0; bottom: 0; inline-size: 10px; block-size: 10px; }\n"
+       ;; As uikit's sticky bar makes it: sticky within the body, so the body must keep its height.
+       "header.wb-header { position: sticky; inset-block-start: 0; }\n"
+       ;; Chromium, launched without --hide-scrollbars, then gives the root a scrollbar that takes
+       ;; 15px, so the body's width and 100vw differ.
+       "::-webkit-scrollbar { inline-size: 15px; width: 15px; background: #888; }\n"))
+
+(def ^:private hw-theme-css ":root { --wb-gap: 24px; --wb-measure: 40rem; }\n")
+
+(defn- hw-layout [{:keys [request] :as slots}]
+  (let [mode (get-in request [:path-params :mode])]
+    (shell/page (assoc slots
+                       :head (list [:link {:rel "stylesheet" :href "/hw.css"}]
+                                   (when (.endsWith ^String (:uri request) "/themed") [:link {:rel "stylesheet" :href "/hw-theme.css"}]))
+                       :header [:div {:id "hw-child"} "h" [:div {:id "hw-bleed"} "b"]]
+                       :header-width (when-not (= mode "default") (keyword mode))))))
+
+(defn- hw-page [tall?]
+  (fn [_] (response/ok (list [:p {:id "hw-text"} "text"] [:div {:id "hw-fixed"}]
+                             (when tall? (repeat 200 [:p "x"]))))))
+
 (defn handler []
   (wb/handler {:session  {:key (byte-array 16 (byte 7))}
                :routes   [["" {:wb/layouts [layout]}
                            ["/a" {:get (page "page a")}]
                            ["/b" {:get (page "page b")}]
-                           ["/c" {:get (page "page c")}]]]
+                           ["/c" {:get (page "page c")}]]
+                          ["/hw.css" {:get (fn [_] {:status 200 :headers {"Content-Type" "text/css; charset=utf-8"} :body hw-css})}]
+                          ["/hw-theme.css" {:get (fn [_] {:status 200 :headers {"Content-Type" "text/css; charset=utf-8"} :body hw-theme-css})}]
+                          ["/hw/:mode" {:wb/layouts [hw-layout]}
+                           ["" {:get (hw-page false)}]
+                           ["/tall" {:get (hw-page true)}]
+                           ["/themed" {:get (hw-page false)}]]]
                :security {:csp csp}}))
 
 (defn -main [& [port]]

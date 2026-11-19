@@ -432,8 +432,11 @@ written.
 
 A layout is a function of one map of slots: `:content`, `:request`, plus whatever
 the handler put under `:wb/slots`. Nesting is composition. `shell/page` is one
-such layout, with slots `:lang :title :head :scripts :header :nav :identity :content
-:footer`; it links `/wb/wb.css` (structural CSS, every colour a `--wb-*` custom
+such layout, with slots `:lang :title :head :scripts :header :header-width :nav :identity
+:content :footer`. `:header-width` (since 0.27.0) is `:full`, the default, a header that
+spans the window; `:aligned`, one that spans it with its content where `<main>`'s text
+starts and ends, never nearer the edge than `--wb-gap`; or `:measure`, the page's column. The
+shell links `/wb/wb.css` (structural CSS, every colour a `--wb-*` custom
 property you redefine), `/wb/htmx.min.js` and `/wb/nav.js` (since 0.24.0, see "htmx"), and puts the CSRF token in
 `hx-headers:inherited` on `<body>` so every htmx request carries it — on a page whose
 markup uses htmx (an `hx-…` or `data-hx-…` attribute) or a form (since 0.18.0). Classic

@@ -27,13 +27,17 @@ body {
   font: 16px/1.5 var(--wb-font);
 }
 
-.wb-header, .wb-nav, .wb-identity, .wb-main, .wb-footer {
+.wb-nav, .wb-identity, .wb-main, .wb-footer {
   max-width: var(--wb-measure);
   margin-inline: auto;
   padding-inline: var(--wb-gap);
 }
 
-.wb-header { padding-block: var(--wb-gap); }
+/* The header spans the window. Under --aligned its content stands where main's text does: the
+ * percentage is of the body's width, which a scrollbar narrows and 100vw does not. */
+.wb-header { padding-block: var(--wb-gap); padding-inline: var(--wb-gap); }
+.wb-header--aligned { padding-inline: max(var(--wb-gap), calc((100% - var(--wb-measure)) / 2 + var(--wb-gap))); }
+.wb-header--measure { max-width: var(--wb-measure); margin-inline: auto; }
 
 .wb-nav {
   display: flex;

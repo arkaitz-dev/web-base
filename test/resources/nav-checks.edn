@@ -4,8 +4,8 @@
 ;; any reds until they run again.
 {:checked "2026-11-19"
  :files {"nav.js" "a12ffa8cfad4ff1710281890c7a54d8f8c9fe7a11739a090f7dbb86def67fb04"
-         "wb.css" "283bec5ce8baa2d005fdf0a3250895d6892a9373e63d6796eb89007d725a925e"
-         "nav-check.mjs" "7cb5b0d0806b2274208e3f945ff6e426863861ec356c6d8b45caedb16a1ff118"
+         "wb.css" "551519f3b5b3de5eb2cdf9487e111dfd3f1bdf7d3d22337ed82b2fd9ad090595"
+         "nav-check.mjs" "aef469548290c4d18c68d634dbb3b64652a10960440ea2a607d27a13a63a4bcd"
          "nav_probe.clj" "004ee3f968c4f464a0d63c919ece4bbf241130c1bf6f6eff6b7868057cca52d5"}
  :runs [
   {:engine "chromium" :version "145.0.7632.6"
@@ -21,6 +21,7 @@
             "header width at 360: every mode is the window with a 16px inset, never less" true
             "header width: a fixed element still stands against the viewport, in every mode" true
             "header width, beside a 15px scrollbar: the inset follows the body's width, not the viewport's, and a sticky header still sticks" true
+            "type size: the body and a paragraph in <main> are the user's default font size (20 where the engine lets it be set, else its 16)" true
             "no CSP violation, no script error" true}}
   {:engine "webkit" :version "26.4"
    :checks {"on load: the page is marked, a host's section and false marks, a fragment, a query, a section of the page and another origin's same path are not" true
@@ -35,6 +36,7 @@
             "header width at 360: every mode is the window with a 16px inset, never less" true
             "header width: a fixed element still stands against the viewport, in every mode" true
             "header width, beside a 15px scrollbar: the inset follows the body's width, not the viewport's, and a sticky header still sticks" true
+            "type size: the body and a paragraph in <main> are the user's default font size (20 where the engine lets it be set, else its 16)" true
             "no CSP violation, no script error" true}}
  ]
  :not-verified ["Firefox: no engine of it on this machine"]}

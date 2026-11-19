@@ -7,7 +7,8 @@ the behaviour. Every release is on Clojars as `dev.arkaitz/web-base` and tagged 
 
 ## 0.27.0 — 2026-11-17
 
-The chrome's current page follows a swap, and the header spans the window.
+The chrome's current page follows a swap, the header spans the window, and the text
+follows the reader's own font size.
 
 **Breaking:** the shell's header is no longer held to the page's column. It spans the
 window, its content `--wb-gap` from the edges; a header that is not a full-width bar moves
@@ -17,6 +18,10 @@ from the column to those edges. `:header-width :measure` gives back the column.
   spans it with the header's content where `<main>`'s text starts and ends, never nearer
   the edge than `--wb-gap`; `:measure` is the 48rem column of the rest of the page. Any
   other value is refused when the page renders, naming the slot, with or without a header.
+- The body's text is `1rem`, no longer `16px`: a reader who raised the browser's default
+  font size gets it on every page, where everything sized in `rem` already followed it. At
+  the default nothing moves. Held in Chromium by setting that size (WebKit has no such
+  setting); `wb.css` sets no type size in an absolute length.
 - `:aligned` takes its inset from the body's width, which a scrollbar narrows and `100vw`
   does not, so it lines up with `<main>` beside one; it follows a host's own `--wb-gap` and
   `--wb-measure`. The header is padded with `--wb-gap`, but for `:aligned`'s inline padding,

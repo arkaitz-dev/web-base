@@ -278,6 +278,62 @@
     (is (= "e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f" hash)
         (str "htmx.min.js sha256 " hash " ≠ the recorded 4.0.0 hash"))))
 
+(defn- uncommented [css] (str/replace css #"(?s)/\*.*?\*/" ""))
+
+(defn- nested-rules
+  "The preludes of the rules of `css` that hold another rule inside them, at-rules (@media
+  and the like) excepted: the flat scan below cannot read a nested rule's declarations, so
+  a nest must red rather than pass unread."
+  [css]
+  (loop [cs (seq (uncommented css)) prelude (StringBuilder.) stack [] nested []]
+    (if-let [c (first cs)]
+      (case c
+        \{ (let [p (str/trim (str prelude))]
+             (recur (rest cs) (StringBuilder.) (conj stack p)
+                    (if (and (seq stack) (not (str/starts-with? (peek stack) "@"))) (conj nested (peek stack)) nested)))
+        \} (recur (rest cs) (StringBuilder.) (pop stack) nested)
+        \; (recur (rest cs) (StringBuilder.) stack nested)
+        (recur (rest cs) (.append prelude c) stack nested))
+      (vec (distinct nested)))))
+
+(defn- type-sizes
+  "Every `font` or `font-size` declaration of `css`, comments stripped, as [rule prop value],
+  each `var(--x)` in a value replaced by the value `css` declares for `--x` (or its fallback),
+  so a size carried by a custom property is judged too. Case-insensitive, as CSS is."
+  [css]
+  (let [css    (uncommented css)
+        custom (into {} (for [[_ k v] (re-seq #"(--[\w-]+)\s*:\s*([^;}]+)" css)] [k (str/trim v)]))
+        expand (fn [v] (nth (iterate #(str/replace % #"var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)" (fn [[_ k fb]] (or (custom k) fb ""))) v) 4))]
+    (for [[_ sel body] (re-seq #"([^{}]+)\{([^{}]*)\}" css)
+          [_ prop value] (re-seq #"(?i)(?<![-\w])(font|font-size)\s*:\s*([^;}]+)" body)]
+      [(str/trim sel) (str/lower-case prop) (expand (str/trim value))])))
+
+(defn- fixed-type-sizes
+  "The type sizes of `css` an absolute length fixes (px, pt, pc, cm, mm, in, Q): a size, a
+  line height in the shorthand, or a term of a calc() — none of which a user's default font
+  size can move."
+  [css]
+  (vec (for [[_ prop value] (type-sizes css)
+             :when (re-find #"(?i)(?<![\w.-])(?:\d+\.?\d*|\.\d+)(?:px|pt|pc|cm|mm|in|q)\b" value)]
+         (str prop ": " value))))
+
+(deftest wb-css-sets-no-type-size-in-an-absolute-length
+  ;; The body's text follows the user's default font size; that it does in a real engine is
+  ;; nav-check.mjs's to see. Here: nothing in wb.css pins a size the user cannot move.
+  (doseq [[sample n] [["body{font:16px/1.5 x}" 1] ["p{font-size: 16px}" 1] ["p{font-size:calc(1rem + 2px)}" 1]
+                      ["p{font:italic 600 .9rem/20px x}" 1] ["p{font-size:12pt}" 1] ["p{FONT-SIZE:16PX}" 1]
+                      [":root{--s: 13px} p{font-size: var(--s)}" 1] ["p{font-size: var(--none, 13px)}" 1]
+                      ["a{border:1px solid red}" 0] ["a{border-inline-start-width:4px}" 0] ["a{padding:max(1rem,2px)}" 0]
+                      ["a{font-size:max(1rem,1.2em)}" 0] ["a{font-weight:600}" 0] [":root{--wb-font: a, b}" 0]]]
+    (is (= n (count (fixed-type-sizes sample))) (str "witness: the detector judges " sample)))
+  (let [css (slurp (io/resource "dev/arkaitz/web_base/public/wb.css"))]
+    (is (= [[] ["p"]] [(nested-rules "@media (x) { p { color: red } }") (nested-rules "p { font-size: 1px; & a { color: red } }")])
+        "witness: a rule inside @media is read flat, and one nested in a rule is caught")
+    (is (= [] (nested-rules css)) "wb.css nests a rule, whose declarations the scan below cannot read")
+    (is (some (fn [[sel prop]] (and (= "body" sel) (= "font" prop))) (type-sizes css))
+        "witness: the scan saw the body's own font declaration")
+    (is (= [] (fixed-type-sizes css)) "wb.css fixes a type size in an absolute length, which a user's default font size cannot move")))
+
 (deftest every-wb-custom-property-used-in-wb-css-is-declared-on-root--and-none-is-dead
   (let [css        (slurp (io/resource "dev/arkaitz/web_base/public/wb.css"))
         root       (second (re-find #"(?s):root \{(.*?)\}" css))

@@ -24,7 +24,7 @@ body {
   margin: 0;
   background: var(--wb-bg);
   color: var(--wb-text);
-  font: 16px/1.5 var(--wb-font);
+  font: 1rem/1.5 var(--wb-font);
 }
 
 .wb-nav, .wb-identity, .wb-main, .wb-footer {

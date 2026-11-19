@@ -88,6 +88,29 @@ await check('header width, beside a 15px scrollbar: the inset follows the body\'
   && eq(o.default.header, [0, 1455]) && eq(o.default.child, [16, 1439]) && eq(o.default.bleed, [0, 1455])
   && eq(o.aligned.header, [0, 1455]) && eq(o.aligned.child, [359.5, 1095.5]) && eq(o.aligned.text, [359.5, 1095.5]) && eq(o.aligned.bleed, [343.5, 1111.5])
   && eq(o.measure.header, [343.5, 1111.5]) && eq(o.measure.child, [359.5, 1095.5]) && eq(o.measure.bleed, [343.5, 1111.5]));
+
+// The user's default font size. Chromium takes it through CDP (Page.setFontSizes, measured to
+// take whether called before or after the load); WebKit has no such knob, so there the check
+// holds the body at the engine's own default only, and the user-default half is Chromium's.
+await check('type size: the body and a paragraph in <main> are the user\'s default font size (20 where the engine lets it be set, else its 16)', async () => {
+  const c = await browser.newContext();
+  await c.addInitScript(`window.__csp=[];document.addEventListener("securitypolicyviolation",e=>window.__csp.push(e.violatedDirective));`);
+  const q = await c.newPage();
+  const knob = engine === 'chromium' ? 20 : null;
+  if (knob) await (await c.newCDPSession(q)).send('Page.setFontSizes', { fontSizes: { standard: knob } });
+  await q.goto(base + '/a');
+  const seen = await q.evaluate(() => {
+    // On <html>, so no stylesheet of the page sizes them: `medium` is the default size itself,
+    // and 16px stays 16px unless the knob scaled everything (a zoom, a minimum size).
+    const span = (v) => { const e = document.createElement('span'); e.style.fontSize = v; document.documentElement.append(e); const f = getComputedStyle(e).fontSize; e.remove(); return f; };
+    return { medium: span('medium'), fixed: span('16px'), root: getComputedStyle(document.documentElement).fontSize,
+      body: getComputedStyle(document.body).fontSize, p: getComputedStyle(document.querySelector('main #label')).fontSize, csp: window.__csp };
+  });
+  await c.close(); return { knob, ...seen };
+}, s => {
+  const want = s.knob ? s.knob + 'px' : '16px';
+  return s.medium === want && s.fixed === '16px' && s.root === want && s.body === want && s.p === want && s.csp.length === 0;
+});
 checks['no CSP violation, no script error'] = await (async () => {
   const csp = await p.evaluate(() => window.__csp); return { pass: csp.length === 0 && errors.length === 0, seen: { csp, errors } };
 })();
